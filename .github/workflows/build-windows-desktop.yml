@@ -47,7 +47,7 @@ jobs:
           $files = @("msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll","concrt140.dll")
           $copied = 0
 
-          # 1) نبحث في حِزم VC++ الحقيقية داخل Visual Studio (النسخة x64 الأمثل).
+          # 1) نبحث في حِزم إعادة التوزيع الحقيقية VC++ (Redist) داخل Visual Studio.
           $vsRoots = @(
             "C:\Program Files\Microsoft Visual Studio",
             "C:\Program Files (x86)\Microsoft Visual Studio"
@@ -55,7 +55,8 @@ jobs:
           foreach ($r in $vsRoots) {
             if (-not (Test-Path $r)) { continue }
             $cand = Get-ChildItem -Path $r -Recurse -Filter "vcruntime140.dll" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.FullName -match "\\x64\\" } | Select-Object -First 1
+                    Where-Object { $_.FullName -match "\\Redist\\" -and $_.FullName -match "\\x64\\" } |
+                    Select-Object -First 1
             if ($cand) {
               Copy-Item "$($cand.Directory.FullName)\*.dll" $dest -Force -ErrorAction SilentlyContinue
               $copied++
