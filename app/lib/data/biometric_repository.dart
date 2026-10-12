@@ -1,10 +1,15 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
+import '../core/biometric_crypto.dart';
 import 'database.dart';
 import 'models.dart';
 
 /// مستودع البيانات الحيوية: يخزّن تمثيل السمات (Embedding) مشفّراً فقط — لا صور.
+///
+/// - يُشفَّر القالب (AES-256-CBC) قبل الحفظ، والمفتاح في المخزن الآمن للنظام.
+/// - `loadAllActive` يعيد البايتات الخام مفكوكة التشفير لبناء `FaceIndex` كما هو.
 class BiometricRepository {
   final _uuid = const Uuid();
 
@@ -18,6 +23,7 @@ class BiometricRepository {
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toUtc().toIso8601String();
     final bytes = _floatsToBytes(embedding);
+    final encrypted = await BiometricCrypto.instance.encryptTemplate(bytes);
 
     final existing = await db.query('biometric_templates',
         where: 'student_id = ? AND is_active = 1 AND deleted_at IS NULL', whereArgs: [studentId], limit: 1);
@@ -25,7 +31,7 @@ class BiometricRepository {
       await db.update(
           'biometric_templates',
           {
-            'template_encrypted': bytes,
+            'template_encrypted': encrypted,
             'quality_score': quality,
             'enrolled_by': enrolledBy,
             'enrolled_at': now,
@@ -37,7 +43,7 @@ class BiometricRepository {
       await db.insert('biometric_templates', {
         'id': _uuid.v4(),
         'student_id': studentId,
-        'template_encrypted': bytes,
+        'template_encrypted': encrypted,
         'embedding_dim': embedding.length,
         'template_version': 'mobilefacenet-v1',
         'quality_score': quality,
@@ -63,17 +69,28 @@ class BiometricRepository {
         WHERE bt.is_active = 1 AND bt.deleted_at IS NULL AND s.school_id = ?
       ''', [schoolId]);
     }
-    return rows
-        .map((r) => BiometricTemplate(
-              id: r['id'] as String,
-              studentId: r['student_id'] as String,
-              templateEncrypted: (r['template_encrypted'] as List).cast<int>(),
-              embeddingDim: (r['embedding_dim'] as int?) ?? 128,
-              templateVersion: (r['template_version'] as String?) ?? 'mobilefacenet-v1',
-              qualityScore: (r['quality_score'] as num?)?.toDouble(),
-              isActive: (r['is_active'] as int) == 1,
-            ))
-        .toList();
+    final out = <BiometricTemplate>[];
+    for (final r in rows) {
+      final raw = r['template_encrypted'];
+      final stored = raw is String ? raw : utf8.decode((raw as List).cast<int>());
+      Uint8List bytes;
+      try {
+        bytes = await BiometricCrypto.instance.decryptTemplate(stored);
+      } catch (_) {
+        // قيمة تالفة أو مفتاح غير متاح: نتخطّى القالب بدل إسقاط الشاشة.
+        continue;
+      }
+      out.add(BiometricTemplate(
+        id: r['id'] as String,
+        studentId: r['student_id'] as String,
+        templateEncrypted: bytes,
+        embeddingDim: (r['embedding_dim'] as int?) ?? 128,
+        templateVersion: (r['template_version'] as String?) ?? 'mobilefacenet-v1',
+        qualityScore: (r['quality_score'] as num?)?.toDouble(),
+        isActive: (r['is_active'] as int) == 1,
+      ));
+    }
+    return out;
   }
 
   /// تعطيل التعرّف لطالب دون حذف ملفه المدرسي.

@@ -10,6 +10,7 @@ import '../../data/repositories.dart';
 import '../widgets/app_tile.dart';
 import 'attendance_screen.dart';
 import 'audit_screen.dart';
+import 'backup_screen.dart';
 import 'academic_screen.dart';
 import 'classes_screen.dart';
 import 'evaluations_screen.dart';
@@ -299,6 +300,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (state.can(Perms.settingsManage)) {
       add('الإعدادات', 'أوقات الدوام ونوافذ الحضور', Icons.settings, AppTheme.textMuted,
           () => _push(const SettingsScreen()));
+    }
+    if (state.can(Perms.backupManage)) {
+      add('النسخ الاحتياطي', 'إنشاء نسخة واستعادة البيانات', Icons.backup, AppTheme.success,
+          () => _push(const BackupScreen()));
     }
     return list;
   }

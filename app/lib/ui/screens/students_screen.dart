@@ -9,6 +9,7 @@ import '../../data/database.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
 import 'student_form_screen.dart';
+import 'student_import_screen.dart';
 import 'student_profile_screen.dart';
 
 /// شاشة الطلاب — تنظيم على شكل «صفوف ← شعب ← طلاب»، مع بحث وإضافة سريعة
@@ -133,7 +134,18 @@ class _StudentsScreenState extends State<StudentsScreen> {
   Widget build(BuildContext context) {
     final canWrite = context.watch<AppState>().can(Perms.studentWrite);
     return Scaffold(
-      appBar: AppBar(title: const Text('الطلاب')),
+      appBar: AppBar(
+        title: const Text('الطلاب'),
+        actions: [
+          if (canWrite)
+            IconButton(
+              tooltip: 'استيراد من ملف',
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const StudentImportScreen())),
+              icon: const Icon(Icons.upload_file),
+            ),
+        ],
+      ),
       floatingActionButton: canWrite
           ? FloatingActionButton.extended(
               onPressed: _addStudent,

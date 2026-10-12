@@ -37,19 +37,11 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
-      - name: Package portable folder
-        shell: pwsh
-        run: |
-          $src = "build/windows/x64/runner/Release"
-          $out = "SmartSchool-Windows"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item -Recurse -Force "$src/*" $out
-          Compress-Archive -Path "$out/*" -DestinationPath "SmartSchool-Windows.zip" -Force
-          Get-ChildItem "SmartSchool-Windows.zip" | Format-List Name,Length
-
-      - name: Upload Windows app (zip)
+      - name: Upload Windows app (Release folder)
         uses: actions/upload-artifact@v4
         with:
+          # نرفع المجلد مباشرةً (لا نضغطه يدوياً) لأن GitHub يضعه في zip.
+          # لتفادي «الضغط المزدوج» الذي يجعل المستخدم يرى ملف zip داخل zip.
           name: SmartSchool-Windows
-          path: app/SmartSchool-Windows.zip
+          path: app/build/windows/x64/runner/Release/
           if-no-files-found: error

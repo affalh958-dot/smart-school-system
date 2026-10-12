@@ -12,6 +12,10 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   Database? _db;
+  String? _dbPath;
+
+  /// مسار ملف قاعدة البيانات الفعلي (يُستخدم للنسخ الاحتياطي والاستعادة).
+  String? get dbPath => _dbPath;
 
   /// مسارات بديلة للاختبار (تُضبط فقط في بيئة الاختبار).
   static String? testDbPath;
@@ -39,6 +43,7 @@ class AppDatabase {
     final dbDir = Directory(p.join(dir.path, 'school_db'));
     if (!dbDir.existsSync()) dbDir.createSync(recursive: true);
     final dbPath = p.join(dbDir.path, 'school.db');
+    _dbPath = dbPath;
     final schema = await rootBundle.loadString('assets/db/schema.sql');
     return _create(dbPath, schema);
   }

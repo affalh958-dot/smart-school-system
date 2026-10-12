@@ -11,6 +11,7 @@ import 'package:school_app/data/biometric_repository.dart';
 import 'package:school_app/data/database.dart';
 import 'package:school_app/data/evaluation_repository.dart';
 import 'package:school_app/data/grade_repository.dart';
+import 'package:school_app/data/import/csv_import_service.dart';
 import 'package:school_app/data/models.dart';
 import 'package:school_app/data/repositories.dart';
 import 'package:school_app/data/reports_repository.dart';
@@ -313,6 +314,27 @@ void main() {
       final all = await bio.loadAllActive();
       expect(all.any((t) => t.studentId == id), isTrue);
       expect(await bio.countEnrolled() >= 1, isTrue);
+    });
+
+    test('تخزين القالب مشفّراً فعلياً ويُسترجع سليماً', () async {
+      final students = StudentRepository();
+      final id = await students.create(Student(
+          id: '', schoolId: schoolId, studentNumber: '3002', fullName: 'طالب مشفّر'));
+      final bio = BiometricRepository();
+      final emb = Float32List.fromList(List.generate(128, (i) => i / 128.0));
+      await bio.upsertTemplate(studentId: id, embedding: emb, quality: 0.9);
+
+      // القيمة المخزّنة في القاعدة يجب أن تكون نصاً مشفّراً لا بايتات خام.
+      final db = await AppDatabase.instance.database;
+      final raw = await db.query('biometric_templates',
+          where: 'student_id = ?', whereArgs: [id], limit: 1);
+      expect(raw.first['template_encrypted'], isA<String>());
+      expect((raw.first['template_encrypted'] as String).startsWith('encv1:'), isTrue);
+
+      // القراءة تعيد البايتات الخام ويستطيع FaceIndex بناءها.
+      final loaded = await bio.loadAllActive();
+      final t = loaded.firstWhere((e) => e.studentId == id);
+      expect(t.templateEncrypted.length, 128 * 4);
     });
 
     test('تسجيل محاولة تعرّف يكتب school_id ويُنشئ مراجعة للحالات الملتبسة', () async {
@@ -736,6 +758,39 @@ void main() {
       expect(listA.any((s) => s.studentNumber == 'B-1'), isFalse);
       expect(listB.map((s) => s.studentNumber), contains('B-1'));
       expect(await repo.all(), isNotEmpty);
+    });
+  });
+
+  group('استيراد الطلاب (CSV)', () {
+    test('تحليل صف رؤوس عربي مع تحقق من التكرار والنواقص', () {
+      const csv = 'الرقم المدرسي,الاسم,الجنس,هاتف ولي الأمر\n'
+          'S1,أحمد علي,ذكر,07700000001\n'
+          'S2,سارة محمد,أنثى,07700000002\n'
+          'S1,مكرّر,ذكر,07700000003\n'
+          ',بلا رقم,ذكر,\n'
+          'S3,,ذكر,\n';
+      final res = CsvImportService.parse(csv, schoolId: schoolId);
+      expect(res.valid.length, 2);
+      expect(res.invalid.length, 3);
+      expect(res.valid.first.student!.fullName, 'أحمد علي');
+      expect(res.valid.every((r) => r.student!.schoolId == schoolId), isTrue);
+    });
+
+    test('استيراد فعلي إلى القاعدة مع تخطّي الموجود مسبقاً', () async {
+      final repo = StudentRepository();
+      const csv = 'الرقم المدرسي,الاسم\nIMP-1,طالب مستورد أ\nIMP-2,طالب مستورد ب\n';
+      final res = CsvImportService.parse(csv, schoolId: schoolId);
+      for (final row in res.valid) {
+        await repo.create(row.student!);
+      }
+      expect(await repo.byNumber(schoolId, 'IMP-1'), isNotNull);
+      expect(await repo.byNumber(schoolId, 'IMP-2'), isNotNull);
+    });
+
+    test('القالب يحتوي ترويسة عربية وصف نموذجي', () {
+      final t = CsvImportService.template();
+      expect(t.contains('الرقم المدرسي'), isTrue);
+      expect(t.contains('الاسم'), isTrue);
     });
   });
 }

@@ -69,6 +69,9 @@ dependencies:
   pdf: ^3.11.1
   printing: ^5.13.4
   share_plus: ^10.1.4
+  encrypt: ^5.0.3
+  flutter_secure_storage: ^10.3.4
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:
