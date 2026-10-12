@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -38,13 +39,10 @@ class AttendanceScreen extends StatefulWidget {
 
 class _AttendanceScreenState extends State<AttendanceScreen> {
   CameraController? _camera;
-  final FaceDetector _detector = FaceDetector(
-    options: FaceDetectorOptions(
-      enableClassification: true,
-      performanceMode: FaceDetectorMode.fast,
-      minFaceSize: 0.15,
-    ),
-  );
+  List<CameraDescription> _cameras = [];
+  int _cameraIndex = 0;
+  int _deviceOrientation = 0;
+  FaceDetector? _detector;
   final AttendanceRepository _attendance = AttendanceRepository();
   final StudentRepository _students = StudentRepository();
 
@@ -54,6 +52,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   int _successCount = 0;
   int _pendingSync = 0;
   int _failedSync = 0;
+  int _unrecognizedCount = 0;
+
+  /// آخر نتائج الكشف لعرض المربّعات فوق الوجه لحظياً (يتحدّث مع كل إطار).
+  List<_FaceBox> _boxes = [];
+  DateTime? _boxesAt;
 
   /// نوع الجلسة: حضور صباحي أو انصراف. يُمنع خلط الانصراف مع الحضور الصباحي.
   String _sessionType = 'morning';
@@ -100,31 +103,84 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         setState(() => _initError = 'لا توجد كاميرا متاحة على هذا الجهاز');
         return;
       }
-      final back = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
-      );
-      final controller = CameraController(
-        back,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.nv21,
-      );
-      await controller.initialize();
-      await controller.startImageStream(_onFrame);
+      _cameras = cameras;
+      // الكاميرا الخلفية افتراضياً للبوابة (أدق وأسرع للوجوه البعيدة).
+      _cameraIndex = cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+      if (_cameraIndex < 0) _cameraIndex = 0;
+      _startOrientationTracking();
+      await _openCamera(_cameras[_cameraIndex]);
       if (!mounted) return;
       final state = context.read<AppState>();
+      _detector = FaceDetector(
+        options: FaceDetectorOptions(
+          enableClassification: true,
+          enableTracking: true,
+          performanceMode: FaceDetectorMode.fast,
+          minFaceSize: 0.12,
+        ),
+      );
       await _loadSettings(state.schoolId);
       await _refreshSyncCounters(state.schoolId);
       await DeviceRepository().ensureRegistered(deviceId: state.ensureDeviceId(), schoolId: state.schoolId ?? '');
       await state.rebuildFaceIndex();
       if (!mounted) return;
-      setState(() {
-        _camera = controller;
-        _running = true;
-      });
+      setState(() => _running = true);
     } catch (e) {
       setState(() => _initError = 'تعذّر تشغيل الكاميرا: $e');
+    }
+  }
+
+  /// يتتبّع اتجاه الجهاز (شاشة عمودية/أفقية) لضبط دوران الصورة نحو ML Kit.
+  void _startOrientationTracking() {
+    void update(Size size) {
+      final o = size.width > size.height ? 90 : 0;
+      if (o != _deviceOrientation) _deviceOrientation = o;
+    }
+
+    final view = WidgetsBinding.instance.platformDispatcher.views.isNotEmpty
+        ? WidgetsBinding.instance.platformDispatcher.views.first
+        : null;
+    if (view != null) update(view.physicalSize);
+    WidgetsBinding.instance.platformDispatcher.onMetricsChanged = () {
+      final v = WidgetsBinding.instance.platformDispatcher.views.first;
+      update(v.physicalSize);
+    };
+  }
+
+  /// فتح الكاميرا المحددة وبدء بثّ الصور.
+  Future<void> _openCamera(CameraDescription description) async {
+    final controller = CameraController(
+      description,
+      ResolutionPreset.high,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.nv21,
+    );
+    await controller.initialize();
+    await controller.startImageStream(_onFrame);
+    if (!mounted) return;
+    setState(() {
+      _camera = controller;
+    });
+  }
+
+  /// التبديل بين الكاميرا الأمامية والخلفية دون مغادرة الشاشة.
+  Future<void> _switchCamera() async {
+    if (_cameras.length < 2) {
+      _snack('لا توجد كاميرا أخرى على هذا الجهاز');
+      return;
+    }
+    try {
+      final wasRunning = _running;
+      setState(() => _running = false);
+      await _camera?.stopImageStream().catchError((_) {});
+      await _camera?.dispose();
+      _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+      await _openCamera(_cameras[_cameraIndex]);
+      if (mounted) setState(() => _running = wasRunning);
+      final dir = _cameras[_cameraIndex].lensDirection == CameraLensDirection.front ? 'الأمامية' : 'الخلفية';
+      _snack('تم التبديل إلى الكاميرا $dir');
+    } catch (e) {
+      _snack('تعذّر تبديل الكاميرا: $e');
     }
   }
 
@@ -142,7 +198,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   Future<void> _processFrame(CameraImage image) async {
     final state = context.read<AppState>();
-    if (!state.faceIndex.isBuilt) return;
 
     // منع التسجيل التلقائي في يوم عطلة أو يوم راحة أسبوعية.
     if (!_isWorkingDay) return;
@@ -150,90 +205,134 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final inputImage = _toInputImage(image);
     if (inputImage == null) return;
 
-    final faces = await _detector.processImage(inputImage);
-    if (faces.isEmpty) return;
+    final detector = _detector;
+    if (detector == null) return;
+    final faces = await detector.processImage(inputImage);
+
+    final sensor = Size(image.width.toDouble(), image.height.toDouble());
+    final boxes = <_FaceBox>[];
+    var sawUnknown = false;
+
+    if (faces.isEmpty) {
+      if (mounted && (_boxes.isNotEmpty || _boxesAt == null)) {
+        setState(() {
+          _boxes = [];
+          _boxesAt = DateTime.now();
+        });
+      }
+      return;
+    }
 
     // معالجة كل وجه في الإطار (لا نفترض وجود طالب واحد فقط)
     for (final face in faces) {
+      final fraction = _boxToFraction(face, sensor);
+      var matchedBox = false;
       final cropped = _cropFace(image, face);
-      if (cropped == null) continue;
-
-      // كشف الحيوية (اختياري)
-      final spoof = state.faceEngine.spoofScore(cropped);
-      if (spoof != null && spoof > AppConfig.spoofThreshold) {
-        await state.biometrics.logAttempt(result: 'spoof', deviceId: state.deviceId, schoolId: state.schoolId);
-        continue;
-      }
-
-      final embedding = state.faceEngine.embed(cropped);
-      if (embedding == null) continue;
-
-      final match = state.faceIndex.identify(embedding);
-      if (!match.accepted || match.studentId == null) {
-        if (match.result != 'no_match') {
-          await state.biometrics.logAttempt(
-              result: match.result, deviceId: state.deviceId, confidence: match.score, schoolId: state.schoolId);
+      if (cropped != null) {
+        // كشف الحيوية (اختياري)
+        final spoof = state.faceEngine.spoofScore(cropped);
+        if (spoof != null && spoof > AppConfig.spoofThreshold) {
+          await state.biometrics.logAttempt(result: 'spoof', deviceId: state.deviceId, schoolId: state.schoolId);
+          if (fraction != null) {
+            boxes.add(_FaceBox(fraction, _BoxState.spoof, 'محاولة انتحال', face.trackingId));
+          }
+          continue;
         }
-        continue;
-      }
 
-      final studentId = match.studentId!;
-      // منع التكرار عبر المهلة
-      final now = DateTime.now();
-      final last = _cooldown[studentId];
-      if (last != null && now.difference(last).inSeconds < AppConfig.cooldownSeconds) {
-        continue;
-      }
-      _cooldown[studentId] = now;
+        final embedding = state.faceEngine.embed(cropped);
+        if (embedding != null) {
+          final match = state.faceIndex.identify(embedding);
+          if (match.accepted && match.studentId != null) {
+            matchedBox = true;
+            final studentId = match.studentId!;
+            final now = DateTime.now();
+            final last = _cooldown[studentId];
+            final inCooldown =
+                last != null && now.difference(last).inSeconds < AppConfig.cooldownSeconds;
 
-      final student = await _studentById(studentId);
-      if (student == null) continue;
+            final student = await _studentById(studentId);
+            final name = student?.fullName ?? '';
+            if (fraction != null) {
+              boxes.add(_FaceBox(fraction, _BoxState.matched, name, face.trackingId));
+            }
+            if (inCooldown) continue;
+            _cooldown[studentId] = now;
+            if (student == null) continue;
 
-      final result = await _attendance.record(
-        studentId: studentId,
-        sessionType: _sessionType,
-        status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
-        source: 'face',
-        deviceId: state.deviceId,
-        confidence: match.score,
-        schoolId: state.schoolId,
-      );
-
-      if (result.outcome == RecordOutcome.recorded) {
-        _successCount++;
-        await _refreshSyncCounters(state.schoolId);
-        if (mounted) {
-          final profile = await _students.fullProfile(studentId);
-          if (!mounted) return;
-          setState(() {
-            _last = _LastResult(
+            final result = await _attendance.record(
               studentId: studentId,
-              name: student.fullName,
-              number: student.studentNumber,
-              section: _sectionLabel(profile),
-              guardianPhone: profile?['guardian_phone'] as String?,
-              residence: profile?['residence'] as String?,
-              notes: profile?['notes'] as String?,
+              sessionType: _sessionType,
               status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
-              time: now,
+              source: 'face',
+              deviceId: state.deviceId,
               confidence: match.score,
+              schoolId: state.schoolId,
             );
-          });
-        }
-      } else if (result.outcome == RecordOutcome.duplicate) {
-        if (mounted) {
-          setState(() {
-            _last = _LastResult(
-              studentId: studentId,
-              name: student.fullName,
-              number: student.studentNumber,
-              status: 'duplicate',
-              time: now,
-              confidence: match.score,
-            );
-          });
+
+            if (result.outcome == RecordOutcome.recorded) {
+              _successCount++;
+              await _refreshSyncCounters(state.schoolId);
+              if (mounted) {
+                final profile = await _students.fullProfile(studentId);
+                if (!mounted) return;
+                setState(() {
+                  _last = _LastResult(
+                    studentId: studentId,
+                    name: student.fullName,
+                    number: student.studentNumber,
+                    section: _sectionLabel(profile),
+                    guardianPhone: profile?['guardian_phone'] as String?,
+                    residence: profile?['residence'] as String?,
+                    notes: profile?['notes'] as String?,
+                    status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
+                    time: now,
+                    confidence: match.score,
+                  );
+                });
+              }
+            } else if (result.outcome == RecordOutcome.duplicate) {
+              if (mounted) {
+                setState(() {
+                  _last = _LastResult(
+                    studentId: studentId,
+                    name: student.fullName,
+                    number: student.studentNumber,
+                    status: 'duplicate',
+                    time: now,
+                    confidence: match.score,
+                  );
+                });
+              }
+            }
+          } else {
+            // لم يُطابَق: نعرض "غير معروف" ونمنع التخمين (لا تسجيل تلقائي).
+            if (match.result == 'ambiguous') {
+              await state.biometrics.logAttempt(
+                  result: match.result, deviceId: state.deviceId, confidence: match.score, schoolId: state.schoolId);
+              if (fraction != null) {
+                boxes.add(_FaceBox(fraction, _BoxState.ambiguous, 'التباس', face.trackingId));
+              }
+            } else {
+              sawUnknown = true;
+              if (fraction != null) {
+                boxes.add(_FaceBox(fraction, _BoxState.unknown, 'غير معروف', face.trackingId));
+              }
+            }
+          }
         }
       }
+      if (!matchedBox && fraction != null && !boxes.any((b) => b.trackingId == face.trackingId)) {
+        boxes.add(_FaceBox(fraction, _BoxState.unknown, 'غير معروف', face.trackingId));
+        sawUnknown = true;
+      }
+    }
+
+    if (sawUnknown) _unrecognizedCount++;
+    if (mounted) {
+      setState(() {
+        _boxes = boxes;
+        _boxesAt = DateTime.now();
+      });
     }
   }
 
@@ -305,42 +404,37 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     return s;
   }
 
-  InputImage? _toInputImage(CameraImage image) {
-    try {
-      final format = InputImageFormatValue.fromRawValue(image.format.raw);
-      if (format == null) return null;
-      final plane = image.planes.first;
-      return InputImage.fromBytes(
-        bytes: plane.bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: InputImageRotation.rotation90deg,
-          format: format,
-          bytesPerRow: plane.bytesPerRow,
-        ),
-      );
-    } catch (_) {
-      return null;
+  /// زاوية دوران الإطار من مستشعر الكاميرا إلى الصورة التي يحلّلها ML Kit.
+  int _rotDegrees() {
+    if (_cameras.isEmpty) return 0;
+    final cam = _cameras[_cameraIndex];
+    final sensor = cam.sensorOrientation;
+    final comp = _deviceOrientation;
+    if (cam.lensDirection == CameraLensDirection.front) {
+      return (sensor + comp) % 360;
     }
+    return (sensor - comp + 360) % 360;
   }
 
-  /// قصّ منطقة الوجه من الإطار وتحويلها إلى صورة RGB.
-  img.Image? _cropFace(CameraImage image, Face face) {
-    try {
-      final full = CameraUtils.frameToRgb(image);
-      if (full == null) return null;
-      final box = face.boundingBox;
-      return CameraUtils.cropBox(full, box.left, box.top, box.width, box.height);
-    } catch (_) {
-      return null;
-    }
+  InputImage? _toInputImage(CameraImage image) {
+    if (_cameras.isEmpty) return null;
+    return CameraUtils.toInputImage(image, _cameras[_cameraIndex], _deviceOrientation);
   }
+
+  /// قصّ منطقة الوجه مع مراعاة الدوران الصحيح (إحداثيات الصورة المدوّرة).
+  img.Image? _cropFace(CameraImage image, Face face) =>
+      CameraUtils.cropFaceRotated(image, face, _rotDegrees());
+
+  /// يحوّل صندوق ML Kit إلى مستطيل نسبي (0..1) داخل الصورة المدوّرة.
+  Rect? _boxToFraction(Face face, Size sensor) =>
+      CameraUtils.boxToFraction(face, sensor, _rotDegrees());
 
   @override
   void dispose() {
+    WidgetsBinding.instance.platformDispatcher.onMetricsChanged = null;
     _camera?.stopImageStream();
     _camera?.dispose();
-    _detector.close();
+    _detector?.close();
     super.dispose();
   }
 
@@ -352,6 +446,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       appBar: AppBar(
         title: Text(isCheckout ? 'شاشة الانصراف' : 'شاشة الحضور'),
         actions: [
+          if (context.read<AppState>().can(Perms.attendanceWrite))
+            IconButton(
+              tooltip: 'تبديل الكاميرا (أمامية/خلفية)',
+              icon: const Icon(Icons.cameraswitch),
+              onPressed: _switchCamera,
+            ),
           if (context.read<AppState>().can(Perms.attendanceWrite))
             IconButton(
               tooltip: 'تسجيل يدوي',
@@ -447,28 +547,75 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         ),
       );
     }
-    if (_camera == null || !_running) {
+    final cam = _camera;
+    if (cam == null || !_running) {
       return const Center(child: CircularProgressIndicator());
     }
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        CameraPreview(_camera!),
-        Positioned(
-          top: 12,
-          right: 12,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
-            child: Row(children: [
-              const Icon(Icons.circle, size: 10, color: AppTheme.success),
-              const SizedBox(width: 6),
-              Text('يعمل تلقائياً • ${context.watch<AppState>().faceIndex.size} وجه مسجّل',
-                  style: const TextStyle(color: Colors.white, fontSize: 12)),
-            ]),
+    final isFront = _cameras.isNotEmpty &&
+        _cameras[_cameraIndex].lensDirection == CameraLensDirection.front;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final view = constraints.biggest;
+        // نغطّي المساحة كاملةً (cover) مع مرآة للكاميرا الأمامية، ونرسم
+        // مربّعات الوجوه بإحداثيات نسبية مضروبة بأبعاد العرض نفسها.
+        double scale = 1;
+        var previewSize = view;
+        final pvSize = cam.value.previewSize;
+        if (pvSize != null) {
+          previewSize = Size(pvSize.height, pvSize.width); // عمودي
+          scale = math.max(view.width / previewSize.width, view.height / previewSize.height);
+        }
+        return ClipRect(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              OverflowBox(
+                maxWidth: previewSize.width * scale,
+                maxHeight: previewSize.height * scale,
+                alignment: Alignment.center,
+                child: Transform.scale(
+                  scaleX: isFront ? -1 : 1,
+                  child: CameraPreview(cam),
+                ),
+              ),
+              // المربّعات فوق الوجوه
+              CustomPaint(
+                painter: _FaceBoxPainter(_boxes, view, mirrored: isFront),
+              ),
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                  child: Row(children: [
+                    const Icon(Icons.circle, size: 10, color: AppTheme.success),
+                    const SizedBox(width: 6),
+                    Text(
+                      'يعمل تلقائياً • ${context.watch<AppState>().faceIndex.size} وجه مسجّل'
+                      '${_unrecognizedCount > 0 ? ' • غير معروف: $_unrecognizedCount' : ''}',
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ]),
+                ),
+              ),
+              Positioned(
+                top: 12,
+                left: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                  child: Row(children: [
+                    Icon(isFront ? Icons.camera_front : Icons.camera_rear, size: 14, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Text(isFront ? 'أمامية' : 'خلفية', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  ]),
+                ),
+              ),
+            ],
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 
@@ -661,4 +808,71 @@ class _LastResult {
     required this.time,
     required this.confidence,
   });
+}
+
+enum _BoxState { matched, ambiguous, unknown, spoof }
+
+/// مربّع وجه نسبي (0..1) مع حالته واسم صاحبه إن عُرف.
+class _FaceBox {
+  final Rect rect;
+  final _BoxState state;
+  final String label;
+  final int? trackingId;
+  _FaceBox(this.rect, this.state, this.label, this.trackingId);
+}
+
+/// يرسم مربّعات الوجوه فوق البثّ: أخضر=تم التعرّف، أصفر=التباس،
+/// برتقالي=غير معروف، أحمر=محاولة انتحال. يعطي تغذية بصرية فورية.
+class _FaceBoxPainter extends CustomPainter {
+  _FaceBoxPainter(this.boxes, this.viewSize, {required this.mirrored});
+  final List<_FaceBox> boxes;
+  final Size viewSize;
+  final bool mirrored;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (boxes.isEmpty) return;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    final fill = Paint()..style = PaintingStyle.fill;
+    for (final b in boxes) {
+      final color = switch (b.state) {
+        _BoxState.matched => AppTheme.success,
+        _BoxState.ambiguous => AppTheme.warning,
+        _BoxState.spoof => AppTheme.danger,
+        _BoxState.unknown => Colors.orange,
+      };
+      var r = Rect.fromLTWH(
+        b.rect.left * size.width,
+        b.rect.top * size.height,
+        b.rect.width * size.width,
+        b.rect.height * size.height,
+      );
+      if (mirrored) {
+        r = Rect.fromLTWH(size.width - r.right, r.top, r.width, r.height);
+      }
+      paint.color = color;
+      canvas.drawRRect(RRect.fromRectAndRadius(r, const Radius.circular(10)), paint);
+
+      if (b.label.isNotEmpty) {
+        final tp = TextPainter(
+          text: TextSpan(
+            text: b.label,
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+          textDirection: TextDirection.rtl,
+        )..layout(maxWidth: r.width + 60);
+        final top = (r.top - tp.height - 8).clamp(0.0, size.height);
+        final bg = Rect.fromLTWH(r.left, top, tp.width + 12, tp.height + 4);
+        fill.color = color.withValues(alpha: 0.85);
+        canvas.drawRRect(RRect.fromRectAndRadius(bg, const Radius.circular(6)), fill);
+        tp.paint(canvas, Offset(bg.left + 6, bg.top + 2));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FaceBoxPainter old) =>
+      old.boxes != boxes || old.viewSize != viewSize || old.mirrored != mirrored;
 }

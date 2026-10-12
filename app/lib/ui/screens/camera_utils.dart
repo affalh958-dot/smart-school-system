@@ -1,6 +1,9 @@
 import 'dart:typed_data';
+import 'dart:ui';
 
+import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 /// أدوات مشتركة لتحويل إطارات الكاميرا واقتصاص الوجه.
 ///
@@ -108,6 +111,176 @@ class CameraUtils {
         uvRowStride: uvRowStride,
         uvPixelStride: uvPixelStride,
       );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// يبني بايتات NV21 كاملة (Y + VU متشابكة) من planes إطار الكاميرا.
+  ///
+  /// هذه الخطوة ضرورية: ML Kit يحتاج الصورة كاملةً (الإضاءة + اللون). تمرير
+  /// قناة Y وحدها يجعل الكشف ضعيفاً وغير موثوق. نقصّ أي حشوة (padding) في
+  /// الصفوف حتى تكون الأبعاد مطابقة تماماً لما يعرفه ML Kit.
+  static Uint8List? toNv21Bytes(CameraImage image) {
+    try {
+      final width = image.width;
+      final height = image.height;
+      final out = Uint8List(width * height * 3 ~/ 2);
+      final yPlane = image.planes[0];
+      final ySrc = yPlane.bytes;
+      final yRowStride = yPlane.bytesPerRow;
+      final yPixelStride = yPlane.bytesPerPixel ?? 1;
+
+      var pos = 0;
+      for (var y = 0; y < height; y++) {
+        var srcRow = y * yRowStride;
+        for (var x = 0; x < width; x++) {
+          out[pos++] = ySrc[srcRow + x * yPixelStride];
+        }
+      }
+
+      if (image.planes.length >= 3) {
+        // YUV420 planar: U ثم V — والمطلوب VU (NV21).
+        final uSrc = image.planes[1].bytes;
+        final vSrc = image.planes[2].bytes;
+        final uRowStride = image.planes[1].bytesPerRow;
+        final uPixelStride = image.planes[1].bytesPerPixel ?? 1;
+        final vRowStride = image.planes[2].bytesPerRow;
+        final vPixelStride = image.planes[2].bytesPerPixel ?? 1;
+        final uvH = height ~/ 2, uvW = width ~/ 2;
+        for (var y = 0; y < uvH; y++) {
+          for (var x = 0; x < uvW; x++) {
+            out[pos++] = vSrc[y * vRowStride + x * vPixelStride];
+            out[pos++] = uSrc[y * uRowStride + x * uPixelStride];
+          }
+        }
+      } else if (image.planes.length >= 2) {
+        // NV21/NV12 جاهزة (بعض الأجهزة): نستخدم UV المتشابك مباشرة.
+        final uvSrc = image.planes[1].bytes;
+        final uvRowStride = image.planes[1].bytesPerRow;
+        final uvPixelStride = image.planes[1].bytesPerPixel ?? 2;
+        final uvH = height ~/ 2, uvW = width ~/ 2;
+        for (var y = 0; y < uvH; y++) {
+          for (var x = 0; x < uvW; x++) {
+            final idx = y * uvRowStride + x * uvPixelStride;
+            out[pos++] = uvSrc[idx];
+            out[pos++] = uvSrc[idx + 1];
+          }
+        }
+      } else {
+        // لا لون متاح: نملأ الرمادي المحايد (128) بدل إسقاط الكشف.
+        final rest = width * height ~/ 2;
+        for (var i = 0; i < rest; i++) {
+          out[pos++] = 128;
+        }
+      }
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// زاوية دوران الإطار المطلوبة لـ ML Kit حسب اتجاه الكاميرا واتجاه الجهاز.
+  static InputImageRotation rotationFor(
+      CameraLensDirection lens, int sensorOrientation, int deviceOrientation) {
+    int rotationCompensation;
+    switch (deviceOrientation) {
+      case 0:
+        rotationCompensation = 0;
+        break;
+      case 90:
+        rotationCompensation = 90;
+        break;
+      case 180:
+        rotationCompensation = 180;
+        break;
+      default:
+        rotationCompensation = 270;
+        break;
+    }
+    final int result;
+    if (lens == CameraLensDirection.front) {
+      result = (sensorOrientation + rotationCompensation) % 360;
+    } else {
+      result = (sensorOrientation - rotationCompensation + 360) % 360;
+    }
+    switch (result) {
+      case 90:
+        return InputImageRotation.rotation90deg;
+      case 180:
+        return InputImageRotation.rotation180deg;
+      case 270:
+        return InputImageRotation.rotation270deg;
+      default:
+        return InputImageRotation.rotation0deg;
+    }
+  }
+
+  /// يبني InputImage صحيحاً (NV21 كامل + دوران مناسب) لكشف الوجه بـ ML Kit.
+  static InputImage? toInputImage(CameraImage image, CameraDescription camera, int deviceOrientation) {
+    final nv21 = toNv21Bytes(image);
+    if (nv21 == null) return null;
+    return InputImage.fromBytes(
+      bytes: nv21,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotationFor(camera.lensDirection, camera.sensorOrientation, deviceOrientation),
+        format: InputImageFormat.nv21,
+        bytesPerRow: image.width,
+      ),
+    );
+  }
+
+  /// درجة دوران الإطار من مستشعر الكاميرا إلى الصورة التي يحلّلها ML Kit.
+  static int rotationDegrees(CameraDescription camera, int deviceOrientation) {
+    final sensor = camera.sensorOrientation;
+    if (camera.lensDirection == CameraLensDirection.front) {
+      return (sensor + deviceOrientation) % 360;
+    }
+    return (sensor - deviceOrientation + 360) % 360;
+  }
+
+  /// يقتصّ وجه ML Kit من صورة RGB مبنية في اتجاه المستشعر، مع تحويل صحيح
+  /// للإحداثيات حسب الدوران (وإلا كان الاقتصاص خاطئاً وترتفع نسبة الفشل).
+  static img.Image? cropFaceRotated(CameraImage image, dynamic face, int rot) {
+    try {
+      final full = frameToRgb(image);
+      if (full == null) return null;
+      final f = image.width.toDouble();
+      final box = face.boundingBox;
+      final bx = box.left, by = box.top;
+      final bw = box.width, bh = box.height;
+      if (rot == 90) {
+        // دوران عكس عقارب الساعة: العرض المُدوّر = عرض المستشعر.
+        return cropBox(full, by, f - bx - bw, bh, bw);
+      } else if (rot == 270) {
+        return cropBox(full, f - by - bh, bx, bh, bw);
+      } else if (rot == 180) {
+        return cropBox(full, f - bx - bw, image.height.toDouble() - by - bh, bw, bh);
+      }
+      return cropBox(full, bx, by, bw, bh);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// يحوّل صندوق ML Kit إلى مستطيل نسبي (0..1) داخل الصورة المدوّرة.
+  static Rect? boxToFraction(Face face, Size sensor, int rot) {
+    try {
+      final f = sensor.width;
+      final bx = face.boundingBox.left, by = face.boundingBox.top;
+      final bw = face.boundingBox.width, bh = face.boundingBox.height;
+      double l, t, w, h;
+      if (rot == 90) {
+        l = by; t = f - bx - bw; w = bh; h = bw;
+      } else if (rot == 270) {
+        l = f - by - bh; t = bx; w = bh; h = bw;
+      } else {
+        l = bx; t = by; w = bw; h = bh;
+      }
+      final rotatedW = (rot == 90 || rot == 270) ? sensor.height : sensor.width;
+      final rotatedH = (rot == 90 || rot == 270) ? sensor.width : sensor.height;
+      return Rect.fromLTWH(l / rotatedW, t / rotatedH, w / rotatedW, h / rotatedH);
     } catch (_) {
       return null;
     }

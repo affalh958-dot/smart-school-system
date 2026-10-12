@@ -63,6 +63,32 @@ class StudentRepository {
     return rows.map(Student.fromMap).toList();
   }
 
+  /// كل طلاب المدرسة (لبحث الوجه والكشف عبر الصفوف) — مرتّبون بالاسم.
+  Future<List<Student>> allBySchool(String schoolId, {int limit = 10000}) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query('students',
+        where: 'school_id = ? AND deleted_at IS NULL',
+        whereArgs: [schoolId],
+        orderBy: 'full_name ASC',
+        limit: limit);
+    return rows.map(Student.fromMap).toList();
+  }
+
+  /// الطلاب الذين لا يملكون أي تمثيل وجه نشط بعد (لتسجيل الوجوه المتتابع).
+  Future<List<Student>> withoutFace(String schoolId, {int limit = 10000}) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery('''
+      SELECT s.* FROM students s
+      WHERE s.school_id = ? AND s.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM biometric_templates bt
+          WHERE bt.student_id = s.id AND bt.is_active = 1 AND bt.deleted_at IS NULL)
+      ORDER BY s.full_name ASC
+      LIMIT ?
+    ''', [schoolId, limit]);
+    return rows.map(Student.fromMap).toList();
+  }
+
   Future<int> countAll(String schoolId) async {
     final db = await AppDatabase.instance.database;
     final r = await db.rawQuery(
