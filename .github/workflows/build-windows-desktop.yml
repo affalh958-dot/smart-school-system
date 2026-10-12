@@ -47,7 +47,11 @@ jobs:
           # هذا سبب شائع لعدم فتح school_app.exe بالنقر على أجهزة لا تحتوي
           # حزمة إعادة التوزيع Visual C++.
           $dest = (Resolve-Path "build/windows/x64/runner/Release").Path
-          $files = @("msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll","concrt140.dll")
+          $files = @(
+            "msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll","msvcp140_atomic_wait.dll",
+            "msvcp140_codecvt_ids.dll","vcruntime140.dll","vcruntime140_1.dll",
+            "vcruntime140_threads.dll","concrt140.dll"
+          )
           $copied = 0
 
           # 1) نبحث في حِزم إعادة التوزيع الحقيقية VC++ (Redist) داخل Visual Studio.
