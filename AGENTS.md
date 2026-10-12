@@ -30,7 +30,7 @@ flutter build apk --debug       # ينتج build/app/outputs/flutter-apk/app-deb
 - `assets/db/schema.sql` — المخطط الكامل (يُنسخ إلى `db/sqlite/schema.sql`، يجب إبقاؤهما متطابقين).
 
 ## قرارات مهمة
-- قاعدة البيانات SQLite للإصدار 3. عند إضافة جداول/أعمدة: **حدّث كلاً من** `app/assets/db/schema.sql` و`db/sqlite/schema.sql`، وأضف ترحيلاً في `_create` (onUpgrade) مع رفع `version`.
+- قاعدة البيانات SQLite للإصدار 3. عند إضافة جداول/أعمدة: **حدّث كلاً من** `app/assets/db/schema.sql` و`db/sqlite/schema.sql`، وأضف ترحيلاً في `_create` (onUpgrade) مع رفع `version`. **تأكد أن الملفين متطابقان** (`diff app/assets/db/schema.sql db/sqlite/schema.sql`) — فالتطبيق يقرأ `assets/db/schema.sql` بينما الاختبار القديم قد يقرأ الآخر.
 - عزل المدارس (Multi-tenant): كل جدول يحمل `school_id`، والاستعلامات مقيّدة به.
 - منع التكرار على مستوى القاعدة (قيود UNIQUE) + مهلة لكل طالب.
 - الأعمال الحساسة تُسجَّل في `audit_log` و`attendance_audit`.

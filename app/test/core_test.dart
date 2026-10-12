@@ -310,6 +310,19 @@ void main() {
       expect(all.any((t) => t.studentId == id), isTrue);
       expect(await bio.countEnrolled() >= 1, isTrue);
     });
+
+    test('تسجيل محاولة تعرّف يكتب school_id ويُنشئ مراجعة للحالات الملتبسة', () async {
+      final bio = BiometricRepository();
+      final attemptId = await bio.logAttempt(
+          result: 'no_match', deviceId: null, confidence: 0.2, schoolId: schoolId);
+      expect(attemptId, isNotEmpty);
+      final db = await AppDatabase.instance.database;
+      final a = await db.query('recognition_attempts', where: 'id = ?', whereArgs: [attemptId]);
+      expect(a.first['school_id'], schoolId);
+      final r = await db.query('recognition_reviews', where: 'attempt_id = ?', whereArgs: [attemptId]);
+      expect(r, isNotEmpty);
+      expect(r.first['school_id'], schoolId);
+    });
   });
 
   group('عزل المدارس', () {
