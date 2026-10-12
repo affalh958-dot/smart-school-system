@@ -1,4 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_state.dart';
@@ -46,6 +51,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   String _status = 'active';
   DateTime? _birthDate;
   String? _sectionId;
+  String? _photoPath;
 
   List<Map<String, dynamic>> _sections = [];
   List<StudentColumn> _columns = [];
@@ -73,6 +79,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       _status = e.status;
       _birthDate = e.birthDate == null ? null : DateTime.tryParse(e.birthDate!);
       _sectionId = e.sectionId;
+      _photoPath = e.photoPath;
     } else {
       _sectionId = widget.presetSectionId;
     }
@@ -117,10 +124,28 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     if (picked != null) setState(() => _birthDate = picked);
   }
 
+  /// التقاط/اختيار صورة شخصية وحفظها داخل مجلد دعم التطبيق.
+  Future<void> _pickPhoto() async {
+    try {
+      final picker = ImagePicker();
+      final shot = await picker.pickImage(source: ImageSource.camera, imageQuality: 70, maxWidth: 600);
+      if (shot == null) return;
+      final dir = await getApplicationSupportDirectory();
+      final photoDir = Directory(p.join(dir.path, 'student_photos'));
+      if (!photoDir.existsSync()) photoDir.createSync(recursive: true);
+      final dest = p.join(photoDir.path, '${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await File(shot.path).copy(dest);
+      if (!mounted) return;
+      setState(() => _photoPath = dest);
+    } catch (e) {
+      _snack('تعذّر اختيار الصورة: $e', AppTheme.danger);
+    }
+  }
+
   String _iso(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  Future<void> _save() async {
+  Future<void> _save({bool addAnother = false}) async {
     final schoolId = _schoolId;
     if (schoolId == null) return;
     if (_number.text.trim().isEmpty || _name.text.trim().isEmpty) {
@@ -148,7 +173,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
         sectionId: _sectionId,
         academicYearId: f?.academicYearId,
         status: _status,
-        photoPath: f?.photoPath,
+        photoPath: _photoPath,
         notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
         nationalId: _nationalId.text.trim().isEmpty ? null : _nationalId.text.trim(),
         studentPhone: _studentPhone.text.trim().isEmpty ? null : _studentPhone.text.trim(),
@@ -184,8 +209,13 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       );
 
       if (!mounted) return;
-      _snack(f == null ? 'تمت إضافة الطالب بنجاح' : 'تم حفظ التعديلات', AppTheme.success);
-      if (!widget.keepOpenAfterSave) {
+      _snack(addAnother ? 'تمت الإضافة — أضف الطالب التالي' : (f == null ? 'تمت إضافة الطالب بنجاح' : 'تم حفظ التعديلات'),
+          AppTheme.success);
+      if (addAnother) {
+        _number.clear();
+        _name.clear();
+        _resetForm();
+      } else if (!widget.keepOpenAfterSave) {
         Navigator.pop(context, id);
       } else {
         _number.clear();
@@ -243,6 +273,8 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                Center(child: _photoPicker()),
+                const SizedBox(height: 8),
                 _sectionTitle('البيانات الأساسية'),
                 _field(_number, 'الرقم المدرسي *', Icons.tag, keyboard: TextInputType.number),
                 _field(_name, 'الاسم الكامل *', Icons.person),
@@ -274,16 +306,46 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
                 ],
                 const SizedBox(height: 20),
                 ElevatedButton.icon(
-                  onPressed: _saving ? null : _save,
+                  onPressed: _saving ? null : () => _save(),
                   icon: _saving
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.save),
                   label: Text(isEdit ? 'حفظ التعديلات' : 'إضافة الطالب'),
                 ),
+                if (!isEdit) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : () => _save(addAnother: true),
+                    icon: const Icon(Icons.playlist_add),
+                    label: const Text('إضافة وحفظ وطالب آخر'),
+                  ),
+                ],
                 const SizedBox(height: 30),
               ],
             ),
     );
+  }
+
+  Widget _photoPicker() {
+    final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
+    return Column(children: [
+      GestureDetector(
+        onTap: _pickPhoto,
+        child: CircleAvatar(
+          radius: 46,
+          backgroundColor: AppTheme.primary.withValues(alpha: 0.12),
+          backgroundImage: hasPhoto ? FileImage(File(_photoPath!)) : null,
+          child: hasPhoto
+              ? null
+              : const Icon(Icons.add_a_photo, size: 32, color: AppTheme.primary),
+        ),
+      ),
+      TextButton.icon(
+        onPressed: _pickPhoto,
+        icon: const Icon(Icons.photo_camera, size: 18),
+        label: Text(hasPhoto ? 'تغيير الصورة' : 'التقاط صورة شخصية'),
+      ),
+    ]);
   }
 
   Widget _sectionTitle(String t) => Padding(
