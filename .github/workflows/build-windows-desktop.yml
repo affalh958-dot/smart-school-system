@@ -1,0 +1,55 @@
+name: build-windows-desktop
+
+# بناء برنامج حاسوب حقيقي لويندوز (exe).
+# يجب أن يعمل على مشغّل windows لأن Flutter لا يمكنه البناء المتقاطع لويندوز من لينكس.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-windows-desktop.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: Fetch dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package portable folder
+        shell: pwsh
+        run: |
+          $src = "build/windows/x64/runner/Release"
+          $out = "SmartSchool-Windows"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Recurse -Force "$src/*" $out
+          Compress-Archive -Path "$out/*" -DestinationPath "SmartSchool-Windows.zip" -Force
+          Get-ChildItem "SmartSchool-Windows.zip" | Format-List Name,Length
+
+      - name: Upload Windows app (zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartSchool-Windows
+          path: app/SmartSchool-Windows.zip
+          if-no-files-found: error

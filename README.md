@@ -17,6 +17,14 @@
 | الاختبارات | ✅ 36 اختباراً ناجحاً |
 | تعدد المدارس (المالك) | ✅ منصة المالك تُنشئ المدارس وتديرها |
 
+## بناء برنامج الحاسوب (Windows)
+Flutter لا يبني ملفات ويندوز (exe) إلا على ويندوز. لذلك:
+- **على جهاز ويندوز:** شغّل `scripts/build_windows.bat` (يتطلب Flutter + Visual Studio 2022 مع
+  workload «Desktop development with C++»). الناتج: `app/build/windows/x64/runner/Release/school_app.exe`.
+- **عبر CI:** الـworkflow `.github/workflows/build-windows-desktop.yml` يبني على `windows-latest`
+  ويرفع ملف `SmartSchool-Windows.zip` قابلاً للتنزيل (فك الضغط وشغّل `school_app.exe` مباشرة).
+- بناء سطح المكتب من لينكس: `flutter build linux --release` (للتجربة والتحقق فقط).
+
 ## التشغيل السريع
 ```bash
 cd app

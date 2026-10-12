@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -75,6 +76,12 @@ class _FaceEnrollScreenState extends State<FaceEnrollScreen> {
   String? get _schoolId => context.read<AppState>().schoolId;
 
   Future<void> _initCamera() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      setState(() => _error =
+          'تسجيل الوجه بالكاميرا يتم على تطبيق الأندرويد المثبّت عند المدخل.\n'
+          'على الحاسوب يمكنك رفع صورة الطالب لتسجيل السمات.');
+      return;
+    }
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
