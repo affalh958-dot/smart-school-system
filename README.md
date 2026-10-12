@@ -14,7 +14,7 @@
 | بناء APK (Android) | ✅ `flutter build apk --split-per-abi` |
 | بناء سطح المكتب | ✅ `flutter build linux --release` (وهدف Windows جاهز) |
 | تحليل الكود | ✅ `flutter analyze` نظيف |
-| الاختبارات | ✅ 36 اختباراً ناجحاً |
+| الاختبارات | ✅ 51 اختباراً ناجحاً |
 | تعدد المدارس (المالك) | ✅ منصة المالك تُنشئ المدارس وتديرها |
 
 ## بناء برنامج الحاسوب (Windows)
@@ -22,7 +22,13 @@ Flutter لا يبني ملفات ويندوز (exe) إلا على ويندوز. 
 - **على جهاز ويندوز:** شغّل `scripts/build_windows.bat` (يتطلب Flutter + Visual Studio 2022 مع
   workload «Desktop development with C++»). الناتج: `app/build/windows/x64/runner/Release/school_app.exe`.
 - **عبر CI:** الـworkflow `.github/workflows/build-windows-desktop.yml` يبني على `windows-latest`
-  ويرفع ملف `SmartSchool-Windows.zip` قابلاً للتنزيل (فك الضغط وشغّل `school_app.exe` مباشرة).
+  وينتج أمرين قابلين للتنزيل:
+  1. `SmartSchool-Setup.exe` — مثبّت حقيقي (Inno Setup) يُنصح به؛ يُثبّت وينشئ اختصاراً على سطح المكتب.
+  2. `SmartSchool-Windows` — الحزمة المحمولة (فك الضغط → `school_app.exe` مباشرة مع مجلد `data` وملفات `dll`).
+  كما يحزم الـworkflow مكتبات Microsoft Visual C++ (`vcruntime140`/`msvcp140` ...) داخل مجلد البرنامج
+  ليعمل على أي جهاز بلا تثبيت مسبق (كان غيابها سبباً في عدم فتح البرنامج بالنقر).
+- **النسخة المنشورة الجاهزة:** [`v1.0.1-win`](https://github.com/affalh958-dot/smart-school-system/releases/tag/v1.0.1-win)
+  — نزّل `SmartSchool-Setup.exe` وشغّله (الأسهل)، أو `SmartSchool-Windows-portable.zip`.
 - بناء سطح المكتب من لينكس: `flutter build linux --release` (للتجربة والتحقق فقط).
 
 ## التشغيل السريع

@@ -26,7 +26,11 @@ flutter build apk --debug       # ينتج build/app/outputs/flutter-apk/app-deb
 - **لا يمكن بناء exe ويندوز على لينكس** (Flutter يتطلب MSVC + Windows). الحل المعتمد: GitHub Actions على `windows-latest`.
 - المستودع الخاص: `affalh958-dot/smart-school-system`. الـworkflow: `.github/workflows/build-windows-desktop.yml`.
 - بناء محلي على أي جهاز ويندوز: `scripts/build_windows.bat` (Flutter + VS2022 C++ workload) → `app/build/windows/x64/runner/Release/school_app.exe`.
-- آخر نسخة منشورة (release): وسم `v1.0.0-win` وملف `SmartSchool-Windows-portable.zip` (فك الضغط + تشغيل `school_app.exe` مباشرة، بلا تثبيت).
+- آخر نسخة منشورة (release): وسم `v1.0.1-win`:
+  - **المثبّت (الأفضل):** `SmartSchool-Setup.exe` → تشغيل ثم نعم، وينشئ اختصاراً على سطح المكتب.
+  - **المحمولة:** `SmartSchool-Windows-portable.zip` (فك الضغط → تشغيل `school_app.exe` مباشرةً مع بقاء مجلد `data` وملفات `dll` بجانبه؛ بلا تثبيت).
+  - سبب تعذّر فتح البرنامج سابقاً بالنقر: غياب مكتبات Microsoft Visual C++؛ صارت الآن **مُحزَّمة داخل المجلد** (vcruntime140/msvcp140...) فيعمل على أي جهاز.
+  - تحقّق من سلامة الملفات (SHA-256): `SmartSchool-Setup.exe` = `a7457c5f...c48eeb8`، `SmartSchool-Windows-portable.zip` = `8e28e76b...4892c1f`.
 - شاشة تسجيل الوجه والكاميرا معطّلة على سطح المكتب برسالة واضحة (التعرّف يتم على الأندرويد عند المدخل).
 
 ## المعمارية
