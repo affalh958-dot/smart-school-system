@@ -41,29 +41,43 @@ jobs:
         shell: pwsh
         run: |
           # ننسخ مكتبات VC++ بجانب البرنامج حتى يعمل على أي جهاز بلا تثبيت مسبق.
-          # نجرّب كل إصدارات VC++ المتوفرة على المشغّل ونأخذ أول نسخة x64.
-          $dest = "build/windows/x64/runner/Release"
-          $found = $false
-          $roots = @(
-            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC",
-            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC",
-            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC",
-            "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC"
+          # هذا سبب شائع لعدم فتح school_app.exe بالنقر على أجهزة لا تحتوي
+          # حزمة إعادة التوزيع Visual C++.
+          $dest = (Resolve-Path "build/windows/x64/runner/Release").Path
+          $files = @("msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll","concrt140.dll")
+          $copied = 0
+
+          # 1) نبحث في حِزم VC++ الحقيقية داخل Visual Studio (النسخة x64 الأمثل).
+          $vsRoots = @(
+            "C:\Program Files\Microsoft Visual Studio",
+            "C:\Program Files (x86)\Microsoft Visual Studio"
           )
-          foreach ($r in $roots) {
+          foreach ($r in $vsRoots) {
             if (-not (Test-Path $r)) { continue }
             $cand = Get-ChildItem -Path $r -Recurse -Filter "vcruntime140.dll" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.FullName -match "x64" } | Select-Object -First 1
+                    Where-Object { $_.FullName -match "\\x64\\" } | Select-Object -First 1
             if ($cand) {
-              $dir = $cand.Directory.FullName
-              Copy-Item "$dir\*.dll" $dest -Force -ErrorAction SilentlyContinue
-              Write-Host "Bundled VC++ runtime from $dir"
-              $found = $true
-              break
+              Copy-Item "$($cand.Directory.FullName)\*.dll" $dest -Force -ErrorAction SilentlyContinue
+              $copied++
+              Write-Host "Bundled VC++ runtime from $($cand.Directory.FullName)"
             }
           }
-          if (-not $found) { Write-Warning "VC++ redistributable not found on runner" }
-          Get-ChildItem $dest -Filter "*.dll" | Select-Object Name | Format-Table
+
+          # 2) احتياطي: ننسخ من System32 (موجودة على المشغّل).
+          if ($copied -eq 0) {
+            foreach ($f in $files) {
+              $src = Join-Path $env:SystemRoot "System32\$f"
+              if (Test-Path $src) { Copy-Item $src $dest -Force; $copied++ }
+            }
+            Write-Host "Bundled VC++ runtime from System32"
+          }
+
+          # التحقق النهائي من وجود المكتبات الحيوية بجانب البرنامج.
+          foreach ($f in @("vcruntime140.dll","msvcp140.dll","flutter_windows.dll","school_app.exe")) {
+            if (-not (Test-Path (Join-Path $dest $f))) { throw "Missing $f in output folder" }
+          }
+          Write-Host "VC++ CRT present. Folder contents:"
+          Get-ChildItem $dest -Filter "*.dll" | Select-Object -ExpandProperty Name
 
       - name: Verify exe exists
         shell: pwsh
