@@ -5,6 +5,8 @@ import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
+import '../../face/face_geometry.dart';
+
 /// أدوات مشتركة لتحويل إطارات الكاميرا واقتصاص الوجه.
 ///
 /// ملاحظة مهمة عن الدقة: إطارات الكاميرا بصيغة YUV (NV21). الاعتماد على
@@ -232,13 +234,12 @@ class CameraUtils {
   }
 
   /// درجة دوران الإطار من مستشعر الكاميرا إلى الصورة التي يحلّلها ML Kit.
-  static int rotationDegrees(CameraDescription camera, int deviceOrientation) {
-    final sensor = camera.sensorOrientation;
-    if (camera.lensDirection == CameraLensDirection.front) {
-      return (sensor + deviceOrientation) % 360;
-    }
-    return (sensor - deviceOrientation + 360) % 360;
-  }
+  static int rotationDegrees(CameraDescription camera, int deviceOrientation) =>
+      FaceGeometry.rotationDegrees(
+        isFront: camera.lensDirection == CameraLensDirection.front,
+        sensorOrientation: camera.sensorOrientation,
+        deviceOrientation: deviceOrientation,
+      );
 
   /// يقتصّ وجه ML Kit من صورة RGB مبنية في اتجاه المستشعر، مع تحويل صحيح
   /// للإحداثيات حسب الدوران (وإلا كان الاقتصاص خاطئاً وترتفع نسبة الفشل).
@@ -246,19 +247,9 @@ class CameraUtils {
     try {
       final full = frameToRgb(image);
       if (full == null) return null;
-      final f = image.width.toDouble();
-      final box = face.boundingBox;
-      final bx = box.left, by = box.top;
-      final bw = box.width, bh = box.height;
-      if (rot == 90) {
-        // دوران عكس عقارب الساعة: العرض المُدوّر = عرض المستشعر.
-        return cropBox(full, by, f - bx - bw, bh, bw);
-      } else if (rot == 270) {
-        return cropBox(full, f - by - bh, bx, bh, bw);
-      } else if (rot == 180) {
-        return cropBox(full, f - bx - bw, image.height.toDouble() - by - bh, bw, bh);
-      }
-      return cropBox(full, bx, by, bw, bh);
+      final sensor = Size(image.width.toDouble(), image.height.toDouble());
+      final r = FaceGeometry.rotatedBoxToSensor(face.boundingBox as Rect, sensor, rot);
+      return cropBox(full, r.left, r.top, r.width, r.height);
     } catch (_) {
       return null;
     }
@@ -267,20 +258,7 @@ class CameraUtils {
   /// يحوّل صندوق ML Kit إلى مستطيل نسبي (0..1) داخل الصورة المدوّرة.
   static Rect? boxToFraction(Face face, Size sensor, int rot) {
     try {
-      final f = sensor.width;
-      final bx = face.boundingBox.left, by = face.boundingBox.top;
-      final bw = face.boundingBox.width, bh = face.boundingBox.height;
-      double l, t, w, h;
-      if (rot == 90) {
-        l = by; t = f - bx - bw; w = bh; h = bw;
-      } else if (rot == 270) {
-        l = f - by - bh; t = bx; w = bh; h = bw;
-      } else {
-        l = bx; t = by; w = bw; h = bh;
-      }
-      final rotatedW = (rot == 90 || rot == 270) ? sensor.height : sensor.width;
-      final rotatedH = (rot == 90 || rot == 270) ? sensor.width : sensor.height;
-      return Rect.fromLTWH(l / rotatedW, t / rotatedH, w / rotatedW, h / rotatedH);
+      return FaceGeometry.rotatedBoxToFraction(face.boundingBox, sensor, rot);
     } catch (_) {
       return null;
     }
