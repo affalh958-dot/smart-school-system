@@ -1,0 +1,340 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:school_app/core/permissions.dart';
+import 'package:school_app/core/security.dart';
+import 'package:school_app/data/attendance_repository.dart';
+import 'package:school_app/data/biometric_repository.dart';
+import 'package:school_app/data/database.dart';
+import 'package:school_app/data/models.dart';
+import 'package:school_app/data/repositories.dart';
+import 'package:school_app/face/face_index.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+/// اختبارات حقيقية للمنطق الأساسي: الأمان، الصلاحيات، منع التكرار،
+/// مطابقة الوجه، وعزل المدارس. تعمل على قاعدة بيانات SQLite فعلية.
+void main() {
+  late String schoolId;
+  late Directory tmp;
+
+  setUpAll(() async {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+    tmp = Directory.systemTemp.createTempSync('school_test');
+    AppDatabase.testDbPath = '${tmp.path}/test.db';
+    AppDatabase.testSchemaPath = 'assets/db/schema.sql';
+    // يُنشئ الجداول
+    final db = await AppDatabase.instance.database;
+    schoolId = 'school-1';
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.insert('schools', {
+      'id': schoolId,
+      'name': 'مدرسة الاختبار',
+      'timezone': 'Asia/Baghdad',
+      'is_active': 1,
+      'created_at': now,
+      'updated_at': now,
+    });
+  });
+
+  tearDownAll(() async {
+    await AppDatabase.instance.close();
+    try {
+      tmp.deleteSync(recursive: true);
+    } catch (_) {}
+  });
+
+  group('الأمان', () {
+    test('تجزئة كلمة المرور والتحقق منها', () {
+      final salt = Security.generateSalt();
+      final hash = Security.hashPassword('كلمةمرور123', salt);
+      expect(Security.verifyPassword('كلمةمرور123', salt, hash), isTrue);
+      expect(Security.verifyPassword('خطأ', salt, hash), isFalse);
+    });
+
+    test('كلمتا مرور مختلفتان تعطيان هاشين مختلفين', () {
+      final salt = Security.generateSalt();
+      expect(Security.hashPassword('a123456', salt), isNot(Security.hashPassword('b123456', salt)));
+    });
+  });
+
+  group('الصلاحيات', () {
+    test('المالك يملك كل الصلاحيات', () {
+      expect(Perms.roleHas(Roles.owner, Perms.tenantManage), isTrue);
+      expect(Perms.roleHas(Roles.owner, Perms.userManage), isTrue);
+    });
+
+    test('المعلم لا يملك إدارة المستخدمين', () {
+      expect(Perms.roleHas(Roles.teacher, Perms.userManage), isFalse);
+      expect(Perms.roleHas(Roles.teacher, Perms.gradeWrite), isTrue);
+    });
+
+    test('موظف الحضور لا يملك إدارة المدارس', () {
+      expect(Perms.roleHas(Roles.attendance, Perms.tenantManage), isFalse);
+      expect(Perms.roleHas(Roles.attendance, Perms.attendanceScreen), isTrue);
+    });
+  });
+
+  group('الطلاب', () {
+    test('إنشاء طالب وبحثه بالرقم المدرسي', () async {
+      final repo = StudentRepository();
+      await repo.create(Student(
+        id: '',
+        schoolId: schoolId,
+        studentNumber: '1001',
+        fullName: 'أحمد محمد',
+      ));
+      final found = await repo.byNumber(schoolId, '1001');
+      expect(found, isNotNull);
+      expect(found!.fullName, 'أحمد محمد');
+    });
+
+    test('منع تكرار الرقم المدرسي', () async {
+      final repo = StudentRepository();
+      expect(
+        () => repo.create(Student(id: '', schoolId: schoolId, studentNumber: '1001', fullName: 'آخر')),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('البحث بالاسم يعيد نتائج', () async {
+      final repo = StudentRepository();
+      await repo.create(Student(id: '', schoolId: schoolId, studentNumber: '1002', fullName: 'سارة علي'));
+      final results = await repo.search(schoolId, 'سارة');
+      expect(results.any((s) => s.studentNumber == '1002'), isTrue);
+    });
+  });
+
+  group('الحضور ومنع التكرار', () {
+    test('تسجيل الحضور مرة واحدة فقط', () async {
+      final students = StudentRepository();
+      final id = await students.create(Student(
+        id: '', schoolId: schoolId, studentNumber: '2001', fullName: 'طالب الحضور'));
+      final att = AttendanceRepository();
+
+      final r1 = await att.record(studentId: id, sessionType: 'morning', status: 'present');
+      expect(r1.outcome, RecordOutcome.recorded);
+
+      final r2 = await att.record(studentId: id, sessionType: 'morning', status: 'present');
+      expect(r2.outcome, RecordOutcome.duplicate);
+    });
+
+    test('client_uuid المكرر يُرفض (منع التكرار عند المزامنة)', () async {
+      final students = StudentRepository();
+      final id = await students.create(Student(
+        id: '', schoolId: schoolId, studentNumber: '2002', fullName: 'طالب المزامنة'));
+      final att = AttendanceRepository();
+      final cuuid = 'fixed-uuid-123';
+
+      final r1 = await att.record(
+          studentId: id, sessionType: 'morning', status: 'present', clientUuid: cuuid);
+      expect(r1.outcome, RecordOutcome.recorded);
+      final r2 = await att.record(
+          studentId: id, sessionType: 'morning', status: 'present', clientUuid: cuuid);
+      expect(r2.outcome, RecordOutcome.duplicate);
+    });
+
+    test('الانصراف لا يُحتسب حضوراً صباحياً', () async {
+      final students = StudentRepository();
+      final id = await students.create(Student(
+        id: '', schoolId: schoolId, studentNumber: '2003', fullName: 'طالب الانصراف'));
+      final att = AttendanceRepository();
+      final morning = await att.record(studentId: id, sessionType: 'morning', status: 'present');
+      final checkout = await att.record(studentId: id, sessionType: 'checkout', status: 'early_leave');
+      expect(morning.outcome, RecordOutcome.recorded);
+      expect(checkout.outcome, RecordOutcome.recorded);
+
+      final recs = await att.byDate(_today());
+      final forStudent = recs.where((r) => r.studentId == id).toList();
+      expect(forStudent.length, 2);
+      expect(forStudent.any((r) => r.sessionType == 'morning'), isTrue);
+      expect(forStudent.any((r) => r.sessionType == 'checkout'), isTrue);
+    });
+
+    test('تعديل الحضور يسجّل تدقيقاً بسبب إلزامي', () async {
+      final students = StudentRepository();
+      final id = await students.create(Student(
+        id: '', schoolId: schoolId, studentNumber: '2004', fullName: 'طالب التعديل'));
+      final userId = await AuthRepository().createUser(
+        username: 'editor1',
+        password: 'secret123',
+        fullName: 'مشرف الحضور',
+        schoolId: schoolId,
+        roleCode: Roles.manager,
+      );
+      final att = AttendanceRepository();
+      final r = await att.record(studentId: id, sessionType: 'morning', status: 'absent');
+      await att.overrideStatus(
+        recordId: r.recordId!,
+        newStatus: 'excused',
+        changedByUserId: userId,
+        reason: 'إذن طبي معتمد',
+      );
+      final recs = await att.byDate(_today());
+      final rec = recs.firstWhere((x) => x.id == r.recordId);
+      expect(rec.status, 'excused');
+
+      final db = await AppDatabase.instance.database;
+      final audit = await db.query('attendance_audit',
+          where: 'attendance_record_id = ?', whereArgs: [r.recordId]);
+      expect(audit.length, 1);
+      expect(audit.first['reason'], 'إذن طبي معتمد');
+      expect(audit.first['old_status'], 'absent');
+      expect(audit.first['new_status'], 'excused');
+    });
+
+    test('إحصاءات اليوم صحيحة', () async {
+      final att = AttendanceRepository();
+      final stats = await att.dailyStats(_today());
+      expect(stats['present']! >= 2, isTrue);
+    });
+  });
+
+  group('مطابقة الوجه', () {
+    test('يطابق تمثيلاً مطابقاً بدقة عالية', () {
+      final index = FaceIndex();
+      final a = _vec([1.0, 0, 0, 0]);
+      final b = _vec([0, 1.0, 0, 0]);
+      index.build([
+        BiometricTemplate(id: 't1', studentId: 's1', templateEncrypted: _toBytes(a)),
+        BiometricTemplate(id: 't2', studentId: 's2', templateEncrypted: _toBytes(b)),
+      ]);
+      final m = index.identify(a, threshold: 0.5, margin: 0.01);
+      expect(m.accepted, isTrue);
+      expect(m.studentId, 's1');
+    });
+
+    test('يعيد no_match عندما لا يوجد تشابه كافٍ', () {
+      final index = FaceIndex();
+      final a = _vec([1.0, 0, 0, 0]);
+      index.build([BiometricTemplate(id: 't1', studentId: 's1', templateEncrypted: _toBytes(a))]);
+      final probe = _vec([0, 0, 0, 1.0]);
+      final m = index.identify(probe, threshold: 0.45);
+      expect(m.accepted, isFalse);
+      expect(m.result, 'no_match');
+    });
+
+    test('يرفض التباس طالبين متشابهين (لا تخمين)', () {
+      final index = FaceIndex();
+      final a = _vec([1.0, 0, 0, 0]);
+      final b = _vec([0.99, 0.01, 0, 0]);
+      index.build([
+        BiometricTemplate(id: 't1', studentId: 's1', templateEncrypted: _toBytes(a)),
+        BiometricTemplate(id: 't2', studentId: 's2', templateEncrypted: _toBytes(b)),
+      ]);
+      final m = index.identify(_vec([1.0, 0, 0, 0]), threshold: 0.45, margin: 0.05);
+      expect(m.result, 'ambiguous');
+      expect(m.accepted, isFalse);
+    });
+
+    test('الأداء: مطابقة على 5000 تمثيل سريعة', () {
+      final index = FaceIndex();
+      final templates = List.generate(5000, (i) {
+        final v = Float32List(128);
+        for (var j = 0; j < 128; j++) {
+          v[j] = ((i + j) % 7) - 3.0;
+        }
+        _normalize(v);
+        return BiometricTemplate(id: 't$i', studentId: 's$i', templateEncrypted: _toBytes(v));
+      });
+      index.build(templates);
+      expect(index.size, 5000);
+      final probe = _vec(_randomNorm(128));
+      final sw = Stopwatch()..start();
+      for (var k = 0; k < 10; k++) {
+        index.identify(probe);
+      }
+      sw.stop();
+      // 10 مطابقات على 5000 طالب يجب أن تكون سريعة جداً
+      expect(sw.elapsedMilliseconds < 2000, isTrue);
+    });
+  });
+
+  group('البيانات الحيوية', () {
+    test('حفظ التمثيل واسترجاعه', () async {
+      final students = StudentRepository();
+      final id = await students.create(Student(
+        id: '', schoolId: schoolId, studentNumber: '3001', fullName: 'طالب الوجه'));
+      final bio = BiometricRepository();
+      final emb = Float32List.fromList(List.generate(128, (i) => i / 128.0));
+      await bio.upsertTemplate(studentId: id, embedding: emb, quality: 0.9);
+      final all = await bio.loadAllActive();
+      expect(all.any((t) => t.studentId == id), isTrue);
+      expect(await bio.countEnrolled() >= 1, isTrue);
+    });
+  });
+
+  group('عزل المدارس', () {
+    test('بيانات مدرسة لا تظهر لمدرسة أخرى', () async {
+      final db = await AppDatabase.instance.database;
+      final now = DateTime.now().toUtc().toIso8601String();
+      await db.insert('schools', {
+        'id': 'school-2',
+        'name': 'مدرسة أخرى',
+        'timezone': 'Asia/Baghdad',
+        'is_active': 1,
+        'created_at': now,
+        'updated_at': now,
+      });
+      await StudentRepository().create(Student(
+        id: '', schoolId: 'school-2', studentNumber: '5001', fullName: 'طالب المدرسة الأخرى'));
+
+      final school1Students = await StudentRepository().search(schoolId, '');
+      expect(school1Students.any((s) => s.studentNumber == '5001'), isFalse);
+
+      final school2Students = await StudentRepository().search('school-2', '');
+      expect(school2Students.any((s) => s.studentNumber == '5001'), isTrue);
+    });
+  });
+}
+
+String _today() {
+  final d = DateTime.now();
+  return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+Float32List _vec(List<double> v) {
+  final f = Float32List(128);
+  for (var i = 0; i < v.length; i++) {
+    f[i] = v[i];
+  }
+  return f;
+}
+
+Float32List _randomNorm(int n) {
+  final f = Float32List(n);
+  for (var i = 0; i < n; i++) {
+    f[i] = (i % 5) - 2.0;
+  }
+  _normalize(f);
+  return f;
+}
+
+void _normalize(Float32List v) {
+  var norm = 0.0;
+  for (final x in v) {
+    norm += x * x;
+  }
+  norm = norm == 0 ? 1 : (norm).abs().toDouble();
+  final s = _sqrt(norm);
+  for (var i = 0; i < v.length; i++) {
+    v[i] = v[i] / s;
+  }
+}
+
+double _sqrt(double x) {
+  var g = x;
+  for (var i = 0; i < 30; i++) {
+    g = 0.5 * (g + x / g);
+  }
+  return g;
+}
+
+List<int> _toBytes(Float32List floats) {
+  final bd = ByteData(floats.length * 4);
+  for (var i = 0; i < floats.length; i++) {
+    bd.setFloat32(i * 4, floats[i], Endian.little);
+  }
+  return bd.buffer.asUint8List();
+}
