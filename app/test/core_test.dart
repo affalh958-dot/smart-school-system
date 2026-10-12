@@ -4,13 +4,17 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:school_app/core/permissions.dart';
 import 'package:school_app/core/security.dart';
+import 'package:school_app/core/whatsapp_helper.dart';
 import 'package:school_app/data/academic_repository.dart';
 import 'package:school_app/data/attendance_repository.dart';
 import 'package:school_app/data/biometric_repository.dart';
 import 'package:school_app/data/database.dart';
+import 'package:school_app/data/evaluation_repository.dart';
 import 'package:school_app/data/grade_repository.dart';
 import 'package:school_app/data/models.dart';
 import 'package:school_app/data/repositories.dart';
+import 'package:school_app/data/reports_repository.dart';
+import 'package:school_app/data/school_repository.dart';
 import 'package:school_app/data/student_columns_repository.dart';
 import 'package:school_app/face/face_index.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -472,6 +476,266 @@ void main() {
 
       final total = await repo.weightedTotal(studentId, subjectId, yearId);
       expect(total, closeTo(80, 0.01));
+    });
+  });
+
+  group('التقييم الأسبوعي التراكمي', () {
+    test('تسجيل تقييم أسبوعي وحساب المتوسط التراكمي', () async {
+      final acad = AcademicRepository();
+      final eval = EvaluationRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'التقييم-رياضيات');
+      final yearId = await _currentYear();
+      final studentId = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9700', fullName: 'طالب التقييم'));
+
+      await eval.setEvaluation(
+          schoolId: schoolId, studentId: studentId, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 1, score: 8, maxScore: 10);
+      await eval.setEvaluation(
+          schoolId: schoolId, studentId: studentId, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 2, score: 6, maxScore: 10);
+
+      final cum = await eval.cumulativeBySubject(studentId, yearId);
+      final row = cum.firstWhere((c) => c['subject_id'] == subjectId);
+      expect(row['weeks'], 2);
+      expect((row['weighted_avg'] as num).toDouble(), closeTo(7, 0.001));
+      final overall = await eval.overallAverage(studentId, yearId);
+      expect(overall, closeTo(70, 0.001));
+    });
+
+    test('تحديث تقييم نفس الأسبوع لا يُنشئ صفاً مكرراً', () async {
+      final acad = AcademicRepository();
+      final eval = EvaluationRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'التقييم-علوم');
+      final yearId = await _currentYear();
+      final studentId = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9701', fullName: 'طالب تقييم2'));
+      await eval.setEvaluation(
+          schoolId: schoolId, studentId: studentId, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 3, score: 5, maxScore: 10);
+      await eval.setEvaluation(
+          schoolId: schoolId, studentId: studentId, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 3, score: 9, maxScore: 10);
+      expect(await eval.countForStudent(studentId), 1);
+      final rows = await eval.studentSubjectEvaluations(studentId, subjectId, yearId);
+      expect((rows.first['score'] as num).toDouble(), 9);
+    });
+
+    test('رفض درجة خارج النطاق', () async {
+      final acad = AcademicRepository();
+      final eval = EvaluationRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'التقييم-حدود');
+      final yearId = await _currentYear();
+      final studentId = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9702', fullName: 'طالب تقييم3'));
+      await expectLater(
+        eval.setEvaluation(
+            schoolId: schoolId, studentId: studentId, subjectId: subjectId,
+            academicYearId: yearId, weekNo: 1, score: 12, maxScore: 10),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  group('ترحيل نهاية السنة', () {
+    test('الناجح يُنقل للشعبة الجديدة والراسب يبقى، مع توثيق الحركات', () async {
+      final acad = AcademicRepository();
+      final yearId = await _currentYear();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'مرحلة الترحيل');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'الأول');
+      final fromSection = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'أ');
+      final toSection = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'ب');
+      final pass = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9800', fullName: 'ناجح', sectionId: fromSection));
+      final repeat = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9801', fullName: 'راسب', sectionId: fromSection));
+
+      await StudentRepository().promoteForNewYear(
+        schoolId: schoolId,
+        newAcademicYearId: yearId,
+        moves: {pass: toSection, repeat: fromSection},
+        reason: 'اختبار الترحيل',
+      );
+
+      final p = await StudentRepository().byId(pass);
+      final r = await StudentRepository().byId(repeat);
+      expect(p!.sectionId, toSection);
+      expect(r!.sectionId, fromSection);
+
+      final db = await AppDatabase.instance.database;
+      final moves = await db.query('student_movements', where: 'student_id IN (?, ?)', whereArgs: [pass, repeat]);
+      expect(moves.length, 2);
+    });
+  });
+
+  group('رسائل واتساب الجاهزة', () {
+    test('تطبيع أرقام الهاتف العراقية للصيغة الدولية', () {
+      expect(WhatsappHelper.normalize('07701234567'), '9647701234567');
+      expect(WhatsappHelper.normalize('+964 770 123 4567'), '9647701234567');
+      expect(WhatsappHelper.normalize('009647701234567'), '9647701234567');
+      expect(WhatsappHelper.normalize('9647701234567'), '9647701234567');
+      expect(WhatsappHelper.normalize(''), '');
+    });
+
+    test('بناء رسالة تقييم تحتوي اسم الطالب والمواد والمعدّل', () {
+      final msg = WhatsappHelper.evaluationMessage(
+        schoolName: 'مدرسة الاختبار',
+        studentName: 'أحمد علي',
+        className: 'الابتدائية / الأول / أ',
+        subjects: [
+          {'subject_name': 'الرياضيات', 'weighted_avg': 8.5, 'max_score': 10, 'weeks': 4},
+          {'subject_name': 'العلوم', 'weighted_avg': 7.0, 'max_score': 10, 'weeks': 3},
+        ],
+        overall: 78.0,
+      );
+      expect(msg, contains('أحمد علي'));
+      expect(msg, contains('الرياضيات'));
+      expect(msg, contains('8.5'));
+      expect(msg, contains('78.0%'));
+    });
+
+    test('حساب المعلم: يُمنح صلاحيات التقييم ورفع الطالب لكن لا يدير المستخدمين', () {
+      expect(Perms.roleHas(Roles.teacher, Perms.studentWrite), isTrue);
+      expect(Perms.roleHas(Roles.teacher, Perms.evaluationWrite), isTrue);
+      expect(Perms.roleHas(Roles.teacher, Perms.biometricManage), isTrue);
+      expect(Perms.roleHas(Roles.teacher, Perms.userManage), isFalse);
+    });
+
+    test('الطالب والولي يقرآن التقييم فقط ولا يكتبانه', () {
+      expect(Perms.roleHas(Roles.student, Perms.evaluationRead), isTrue);
+      expect(Perms.roleHas(Roles.student, Perms.evaluationWrite), isFalse);
+      expect(Perms.roleHas(Roles.guardian, Perms.evaluationRead), isTrue);
+      expect(Perms.roleHas(Roles.guardian, Perms.evaluationWrite), isFalse);
+    });
+  });
+
+  group('تقارير التقييم', () {
+    test('تقرير التقييمات في نطاق زمني يعيد الصفوف الصحيحة', () async {
+      final acad = AcademicRepository();
+      final eval = EvaluationRepository();
+      final reports = ReportsRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'تقارير-عربي');
+      final yearId = await _currentYear();
+      final sid = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9900', fullName: 'طالب تقرير'));
+      await eval.setEvaluation(
+          schoolId: schoolId, studentId: sid, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 5, score: 7, maxScore: 10);
+
+      final today = _today();
+      final rows = await reports.evaluationsBySubject(schoolId, today, today);
+      expect(rows.any((r) => r['student_number'] == '9900' && r['subject_name'] == 'تقارير-عربي'), isTrue);
+    });
+
+    test('المعدّل التراكمي لكل طالب يُحسب كنسبة صحيحة', () async {
+      final acad = AcademicRepository();
+      final eval = EvaluationRepository();
+      final reports = ReportsRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'تقارير-رياضيات');
+      final yearId = await _currentYear();
+      final sid = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9901', fullName: 'طالب معدّل'));
+      await eval.setEvaluation(schoolId: schoolId, studentId: sid, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 1, score: 9, maxScore: 10);
+      await eval.setEvaluation(schoolId: schoolId, studentId: sid, subjectId: subjectId,
+          academicYearId: yearId, weekNo: 2, score: 9, maxScore: 10);
+      final rows = await reports.cumulativeEvaluationSummary(schoolId);
+      final row = rows.firstWhere((r) => r['student_number'] == '9901');
+      expect((row['avg_pct'] as num).toDouble(), closeTo(90, 0.1));
+      expect(row['weeks'], 2);
+    });
+  });
+
+  group('منصة المالك (تعدد المدارس)', () {
+    test('المالك ينشئ مدرسة معزولة مع مديرها وإعداداتها وسنتها', () async {
+      final repo = SchoolRepository();
+      final id = await repo.createSchool(
+        name: 'مدرسة الرافدين',
+        managerUsername: 'rafidain_mgr',
+        managerPassword: 'secret123',
+        managerName: 'أ. مدير الرافدين',
+        seedStageNames: ['الابتدائية'],
+        seedGrades: [
+          ['الأول', 'الثاني']
+        ],
+      );
+      expect(id, isNotEmpty);
+
+      final school = await repo.byId(id);
+      expect(school, isNotNull);
+      expect(school!['name'], 'مدرسة الرافدين');
+
+      // إعدادات وسنة دراسية أُنشئتا تلقائياً
+      final db = await AppDatabase.instance.database;
+      final settings = await db.query('attendance_settings', where: 'school_id = ?', whereArgs: [id]);
+      expect(settings, isNotEmpty);
+      final years = await db.query('academic_years', where: 'school_id = ? AND is_current = 1', whereArgs: [id]);
+      expect(years, isNotEmpty);
+      // هيكل مبدئي
+      final stages = await db.query('stages', where: 'school_id = ?', whereArgs: [id]);
+      expect(stages.map((e) => e['name']), contains('الابتدائية'));
+      final stageId = stages.first['id'];
+      final grades = await db.query('grades', where: 'stage_id = ?', whereArgs: [stageId]);
+      expect(grades.length, 2);
+    });
+
+    test('مدير المدرسة يستطيع الدخول ببياناته ويرتبط بمدرسته فقط', () async {
+      final repo = SchoolRepository();
+      final id = await repo.createSchool(
+        name: 'مدرسة دجلة',
+        managerUsername: 'dijla_mgr',
+        managerPassword: 'secret123',
+      );
+      final user = await AuthRepository().login('dijla_mgr', 'secret123');
+      expect(user, isNotNull);
+      expect(user!['school_id'], id);
+      expect((user['roles'] as List).contains(Roles.manager), isTrue);
+      expect((user['roles'] as List).contains(Roles.owner), isFalse);
+    });
+
+    test('تعطيل المدرسة يعطّل حساباتها (لا دخول)', () async {
+      final repo = SchoolRepository();
+      final id = await repo.createSchool(
+        name: 'مدرسة الفرات',
+        managerUsername: 'furat_mgr',
+        managerPassword: 'secret123',
+      );
+      expect(await AuthRepository().login('furat_mgr', 'secret123'), isNotNull);
+      await repo.setActive(id, false);
+      expect(await AuthRepository().login('furat_mgr', 'secret123'), isNull);
+    });
+
+    test('حساب الطالب يُربط بملف طالب ويعيد student_id عند الدخول', () async {
+      final sid = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9950', fullName: 'طالب حساب'));
+      await AuthRepository().createUser(
+        username: 'student_acc',
+        password: 'secret123',
+        fullName: 'طالب حساب',
+        schoolId: schoolId,
+        roleCode: Roles.student,
+        studentId: sid,
+      );
+      final user = await AuthRepository().login('student_acc', 'secret123');
+      expect(user, isNotNull);
+      expect(user!['student_id'], sid);
+      expect((user['roles'] as List).contains(Roles.student), isTrue);
+    });
+
+    test('بيانات مدرستين معزولة تماماً (طلاب)', () async {
+      final repo = SchoolRepository();
+      final a = await repo.createSchool(name: 'مدرسة ألف');
+      final b = await repo.createSchool(name: 'مدرسة باء');
+      await StudentRepository().create(
+          Student(id: '', schoolId: a, studentNumber: 'A-1', fullName: 'طالب ألف'));
+      await StudentRepository().create(
+          Student(id: '', schoolId: b, studentNumber: 'B-1', fullName: 'طالب باء'));
+      final listA = await StudentRepository().search(a, '');
+      final listB = await StudentRepository().search(b, '');
+      expect(listA.map((s) => s.studentNumber), contains('A-1'));
+      expect(listA.any((s) => s.studentNumber == 'B-1'), isFalse);
+      expect(listB.map((s) => s.studentNumber), contains('B-1'));
+      expect(await repo.all(), isNotEmpty);
     });
   });
 }

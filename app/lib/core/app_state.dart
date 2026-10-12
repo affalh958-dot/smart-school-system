@@ -20,6 +20,7 @@ class AppState extends ChangeNotifier {
   String _schoolName = '';
   List<String> _roles = [];
   String? _deviceId;
+  String? _studentId;
   bool _busy = false;
 
   Map<String, dynamic>? get user => _user;
@@ -27,8 +28,18 @@ class AppState extends ChangeNotifier {
   String get schoolName => _schoolName;
   List<String> get roles => _roles;
   String? get deviceId => _deviceId;
+  String? get studentId => _studentId;
   bool get busy => _busy;
   bool get isLoggedIn => _user != null;
+
+  /// طالب مسجّل دخوله (لعرض ملفه وتقييماته فقط).
+  bool get isStudent => _roles.contains(Roles.student) && !isPlatformOwner;
+
+  /// المالك = مدير المنصة: ينشئ المدارس ويديرها، وليس مدير مدرسة.
+  bool get isPlatformOwner => _roles.contains(Roles.owner);
+
+  /// موظف/مدير مدرسة: مرتبط بمدرسة واحدة نشطة.
+  bool get isSchoolBound => _schoolId != null;
 
   /// الدور الأساسي (الأعلى مرتبة) لعرض القائمة المناسبة.
   String get primaryRole {
@@ -60,6 +71,7 @@ class AppState extends ChangeNotifier {
     _user = user;
     _roles = (user['roles'] as List).cast<String>();
     _schoolId = user['school_id'] as String?;
+    _studentId = user['student_id'] as String?;
     notifyListeners();
   }
 
@@ -89,6 +101,7 @@ class AppState extends ChangeNotifier {
   void logout() {
     _user = null;
     _roles = [];
+    _studentId = null;
     notifyListeners();
   }
 

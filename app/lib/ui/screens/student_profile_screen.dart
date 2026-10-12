@@ -4,13 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_state.dart';
+import '../../core/permissions.dart';
 import '../../core/theme.dart';
+import '../../core/whatsapp_helper.dart';
 import '../../data/biometric_repository.dart';
 import '../../data/database.dart';
+import '../../data/evaluation_repository.dart';
 import '../../data/repositories.dart';
 import '../../data/student_columns_repository.dart';
 import '../../data/models.dart';
 import 'student_form_screen.dart';
+import 'card_screen.dart';
 
 /// الملف الشخصي للطالب — أنيق ومتناسق، يعرض كل المعلومات والسمات المخصّصة،
 /// وحالة بصمة الوجه، وملخص الحضور.
@@ -26,6 +30,8 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
   Map<String, dynamic>? _profile;
   Map<String, String> _customLabels = {};
   Map<String, String> _attendance = {};
+  List<Map<String, dynamic>> _cumulative = [];
+  double? _overall;
   bool _enrolled = false;
   bool _loading = true;
 
@@ -50,14 +56,59 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
       WHERE student_id = ? AND deleted_at IS NULL GROUP BY status
     ''', [widget.studentId]);
     final enrolledIds = await BiometricRepository().enrolledStudentIds();
+    final yearId = await _currentYear();
+    final cumulative = await EvaluationRepository().cumulativeBySubject(widget.studentId, yearId);
+    final overall = await EvaluationRepository().overallAverage(widget.studentId, yearId);
     if (!mounted) return;
     setState(() {
       _profile = profile;
       _customLabels = labels;
       _attendance = {for (final r in attRows) r['status'] as String: '${r['c']}'};
       _enrolled = enrolledIds.contains(widget.studentId);
+      _cumulative = cumulative;
+      _overall = overall;
       _loading = false;
     });
+  }
+
+  Future<String?> _currentYear() async {
+    final schoolId = context.read<AppState>().schoolId;
+    if (schoolId == null) return null;
+    final rows = await (await AppDatabase.instance.database).query('academic_years',
+        where: 'school_id = ? AND deleted_at IS NULL',
+        whereArgs: [schoolId],
+        orderBy: 'is_current DESC, start_date DESC',
+        limit: 1);
+    return rows.isEmpty ? null : rows.first['id'] as String;
+  }
+
+  Future<void> _sendWhatsapp() async {
+    final p = _profile!;
+    final schoolName = context.read<AppState>().schoolName;
+    final phone = (p['guardian_phone'] ?? p['student_phone'] ?? '').toString();
+    if (phone.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('لا يوجد رقم هاتف مسجّل لهذا الطالب')));
+      return;
+    }
+    final className = '${p['stage_name'] ?? ''} / ${p['grade_name'] ?? ''} / ${p['section_name'] ?? ''}';
+    final yearId = await _currentYear();
+    final all = await EvaluationRepository().studentAllEvaluations(widget.studentId, yearId);
+    final overall = await EvaluationRepository().overallAverage(widget.studentId, yearId);
+    final msg = WhatsappHelper.evaluationMessage(
+      schoolName: schoolName,
+      studentName: p['full_name'] as String,
+      className: className,
+      subjects: _cumulative,
+      overall: overall,
+      note: all.isNotEmpty ? 'التقييم من إعداد المدرسة.' : null,
+    );
+    final ok = await WhatsappHelper.send(phone: phone, message: msg);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('تعذّر فتح واتساب — تحقق من الرقم')));
+    }
   }
 
   Future<void> _edit() async {
@@ -74,7 +125,16 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
       appBar: AppBar(
         title: const Text('ملف الطالب'),
         actions: [
-          IconButton(onPressed: _edit, icon: const Icon(Icons.edit), tooltip: 'تعديل'),
+          if (context.watch<AppState>().can(Perms.studentWrite))
+            IconButton(onPressed: _edit, icon: const Icon(Icons.edit), tooltip: 'تعديل'),
+          if (context.watch<AppState>().can(Perms.studentWrite))
+            IconButton(onPressed: _sendWhatsapp, icon: const Icon(Icons.chat), tooltip: 'إرسال تقييم واتساب'),
+          IconButton(
+            onPressed: () => Navigator.push(
+                context, MaterialPageRoute(builder: (_) => CardScreen(studentId: widget.studentId))),
+            icon: const Icon(Icons.badge),
+            tooltip: 'بطاقة الطالب',
+          ),
         ],
       ),
       body: _loading
@@ -88,6 +148,7 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
   Widget _body() {
     final p = _profile!;
     final photo = p['photo_path'] as String?;
+    final canSend = context.watch<AppState>().can(Perms.studentWrite);
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -128,6 +189,7 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
           _row('الجنس', p['gender'] == 'male' ? 'ذكر' : (p['gender'] == 'female' ? 'أنثى' : '-')),
           _row('تاريخ الميلاد', p['birth_date'] ?? '-'),
           _row('رقم الهوية', p['national_id'] ?? '-'),
+          _row('الحالة الصحية', (p['health_status'] ?? '').toString().isEmpty ? 'سليم' : '${p['health_status']}'),
         ]),
         _card('التواصل والسكن', Icons.contact_phone, [
           _row('هاتف الطالب', p['student_phone'] ?? '-'),
@@ -139,6 +201,33 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
         if (_customLabels.isNotEmpty)
           _card('حقول إضافية', Icons.edit_note,
               _customLabels.entries.map((e) => _row(e.key, e.value)).toList()),
+        _card('التقييم الأسبوعي التراكمي', Icons.insights, [
+          if (_overall != null)
+            _row('المعدّل العام', '${_overall!.toStringAsFixed(1)}%'),
+          if (_cumulative.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: Text('لا توجد تقييمات مسجّلة بعد', style: TextStyle(color: AppTheme.textMuted)),
+            ),
+          ..._cumulative.map((c) {
+            final avg = c['weighted_avg'];
+            final max = c['max_score'] ?? 10;
+            final val = avg == null ? '-' : '${(avg as num).toStringAsFixed(1)} / $max';
+            return _row('${c['subject_name']} (${c['weeks']} أسبوع)', val);
+          }),
+          if (_cumulative.isNotEmpty && canSend)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: _sendWhatsapp,
+                  icon: const Icon(Icons.chat, color: AppTheme.success),
+                  label: const Text('إرسال التقييم على واتساب'),
+                ),
+              ),
+            ),
+        ]),
         _card('ملاحظات', Icons.notes, [_row('ملاحظات', p['notes'] ?? '-')]),
         const SizedBox(height: 20),
       ],

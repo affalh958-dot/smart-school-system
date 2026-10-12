@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS students (
   guardian_name    TEXT,
   guardian_phone   TEXT,
   residence        TEXT,
+  health_status    TEXT,
+  user_id          TEXT,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   deleted_at       TEXT,
@@ -201,8 +203,10 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   password_salt TEXT,
   full_name     TEXT NOT NULL,
+  phone         TEXT,
   is_active     INTEGER NOT NULL DEFAULT 1,
   teacher_id    TEXT REFERENCES teachers(id),
+  student_id    TEXT,
   last_login_at TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
@@ -436,6 +440,31 @@ CREATE TABLE IF NOT EXISTS grade_audit (
   reason     TEXT,
   created_at TEXT NOT NULL
 );
+
+-- التقييم الأسبوعي التراكمي: لكل طالب × مادة × أسبوع تقييم من المعلم.
+-- تراكمي عبر المجموع المرجّح (SUM(score*weight)/SUM(weight)).
+CREATE TABLE IF NOT EXISTS weekly_evaluations (
+  id               TEXT PRIMARY KEY,
+  school_id        TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  student_id       TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  subject_id       TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+  section_id       TEXT REFERENCES sections(id),
+  academic_year_id TEXT REFERENCES academic_years(id),
+  teacher_id       TEXT REFERENCES teachers(id),
+  week_no          INTEGER NOT NULL,
+  week_start       TEXT,
+  score            REAL,
+  max_score        REAL NOT NULL DEFAULT 10,
+  weight           REAL NOT NULL DEFAULT 1,
+  comment          TEXT,
+  evaluated_by     TEXT REFERENCES users(id),
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  deleted_at       TEXT,
+  UNIQUE (student_id, subject_id, academic_year_id, week_no)
+);
+CREATE INDEX IF NOT EXISTS idx_eval_student ON weekly_evaluations(student_id, academic_year_id);
+CREATE INDEX IF NOT EXISTS idx_eval_school  ON weekly_evaluations(school_id, week_no);
 
 -- ---------------------------------------------------------------------------
 -- 8) المزامنة، التدقيق، الإعدادات، النسخ الاحتياطي

@@ -45,6 +45,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   final _guardianPhone = TextEditingController();
   final _residence = TextEditingController();
   final _address = TextEditingController();
+  final _health = TextEditingController();
   final _notes = TextEditingController();
 
   String? _gender;
@@ -74,6 +75,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       _guardianPhone.text = e.guardianPhone ?? '';
       _residence.text = e.residence ?? '';
       _address.text = e.address ?? '';
+      _health.text = e.healthStatus ?? '';
       _notes.text = e.notes ?? '';
       _gender = e.gender;
       _status = e.status;
@@ -180,6 +182,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
         guardianName: _guardianName.text.trim().isEmpty ? null : _guardianName.text.trim(),
         guardianPhone: _guardianPhone.text.trim().isEmpty ? null : _guardianPhone.text.trim(),
         residence: _residence.text.trim().isEmpty ? null : _residence.text.trim(),
+        healthStatus: _health.text.trim().isEmpty ? null : _health.text.trim(),
         enrollmentDate: f?.enrollmentDate,
       );
 
@@ -236,6 +239,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     _guardianPhone.clear();
     _residence.clear();
     _address.clear();
+    _health.clear();
     _notes.clear();
     _gender = null;
     _birthDate = null;
@@ -259,6 +263,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     _guardianPhone.dispose();
     _residence.dispose();
     _address.dispose();
+    _health.dispose();
     _notes.dispose();
     super.dispose();
   }
@@ -291,6 +296,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
                 _field(_guardianPhone, 'هاتف ولي الأمر', Icons.phone, keyboard: TextInputType.phone),
                 _field(_residence, 'السكن', Icons.home),
                 _field(_address, 'العنوان', Icons.location_on),
+                _field(_health, 'الحالة الصحية', Icons.medical_information),
                 const SizedBox(height: 8),
                 _sectionTitle('الصف والشعبة'),
                 _sectionField(),

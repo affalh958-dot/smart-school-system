@@ -30,6 +30,8 @@ class Student {
   final String? guardianPhone;
   final String? residence;
   final String? enrollmentDate;
+  final String? healthStatus;
+  final String? userId;
 
   Student({
     required this.id,
@@ -50,6 +52,8 @@ class Student {
     this.guardianPhone,
     this.residence,
     this.enrollmentDate,
+    this.healthStatus,
+    this.userId,
   });
 
   factory Student.fromMap(Map<String, dynamic> m) => Student(
@@ -71,6 +75,8 @@ class Student {
         guardianPhone: m['guardian_phone'],
         residence: m['residence'],
         enrollmentDate: m['enrollment_date'],
+        healthStatus: m['health_status'],
+        userId: m['user_id'],
       );
 
   Map<String, dynamic> toMap() => {
@@ -92,6 +98,8 @@ class Student {
         'guardian_phone': guardianPhone,
         'residence': residence,
         'enrollment_date': enrollmentDate,
+        'health_status': healthStatus,
+        'user_id': userId,
       };
 }
 

@@ -113,5 +113,94 @@ class ReportService {
     return XlsxWriter.build(sheetName: report.title, rows: rows);
   }
 
+  /// بناء بطاقة الطالب التعريفية PDF (مقاس بطاقة) — أنيقة مع صورة وبيانات وQR نصي.
+  static Future<Uint8List> toStudentCardPdf({
+    required String schoolName,
+    required Map<String, String> fields,
+    Uint8List? photo,
+    String? qrPayload,
+  }) async {
+    final doc = pw.Document();
+    final theme = pw.ThemeData.withFont(base: _font, bold: _arabicBold ?? _font, fontFallback: _fallback);
+    pw.MemoryImage? photoImg;
+    if (photo != null) {
+      try {
+        photoImg = pw.MemoryImage(photo);
+      } catch (_) {}
+    }
+
+    doc.addPage(
+      pw.Page(
+        pageFormat: const PdfPageFormat(242, 153, marginAll: 8),
+        textDirection: pw.TextDirection.rtl,
+        theme: theme,
+        build: (ctx) => pw.Container(
+          decoration: pw.BoxDecoration(
+            border: pw.Border.all(color: PdfColors.blueGrey700, width: 1.5),
+            borderRadius: pw.BorderRadius.circular(10),
+          ),
+          padding: const pw.EdgeInsets.all(8),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [
+              pw.Container(
+                decoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
+                padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                child: pw.Text(schoolName,
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(color: PdfColors.white, fontSize: 12, fontWeight: pw.FontWeight.bold)),
+              ),
+              pw.SizedBox(height: 6),
+              pw.Expanded(
+                child: pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Container(
+                      width: 62,
+                      height: 74,
+                      decoration: pw.BoxDecoration(
+                        border: pw.Border.all(color: PdfColors.grey500),
+                        color: PdfColors.grey200,
+                      ),
+                      child: photoImg != null
+                          ? pw.Image(photoImg, fit: pw.BoxFit.cover)
+                          : pw.Center(child: pw.Text('لا صورة', style: const pw.TextStyle(fontSize: 8))),
+                    ),
+                    pw.SizedBox(width: 8),
+                    pw.Expanded(
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: fields.entries
+                            .take(7)
+                            .map((e) => pw.Padding(
+                                  padding: const pw.EdgeInsets.only(bottom: 2),
+                                  child: pw.Row(children: [
+                                    pw.Text('${e.key}: ',
+                                        style: pw.TextStyle(
+                                            fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
+                                    pw.Expanded(
+                                        child: pw.Text(e.value,
+                                            style: const pw.TextStyle(fontSize: 8.5),
+                                            maxLines: 1,
+                                            overflow: pw.TextOverflow.clip)),
+                                  ]),
+                                ))
+                            .toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (qrPayload != null)
+                pw.Text('رمز التحقق: $qrPayload',
+                    style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
+            ],
+          ),
+        ),
+      ),
+    );
+    return doc.save();
+  }
+
   static String _p(int v) => v.toString().padLeft(2, '0');
 }

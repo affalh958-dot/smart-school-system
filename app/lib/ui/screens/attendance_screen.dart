@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
@@ -67,6 +69,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Future<void> _start() async {
+    if (kIsWeb) {
+      setState(() => _initError = 'الكاميرا غير مدعومة في متصفح الويب — ثبّت التطبيق على أندرويد');
+      return;
+    }
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      setState(() => _initError =
+          'التعرّف على الوجه بالكاميرا يعمل على تطبيق الأندرويد المثبّت عند المدخل.\n'
+          'على الحاسوب يمكنك التسجيل اليدوي أو مراجعة السجلات والتقارير.');
+      return;
+    }
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {

@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../core/app_state.dart';
-import '../../core/config.dart';
 import '../../core/permissions.dart';
 import '../../core/theme.dart';
 import '../../data/database.dart';
 import '../../data/repositories.dart';
 import 'dashboard_screen.dart';
+import 'platform_dashboard_screen.dart';
+import 'student_home_screen.dart';
 
 /// شاشة الدخول. عند أول تشغيل تُنشئ حساب المالك الثابت والمدرسة الأولى.
 class LoginScreen extends StatefulWidget {
@@ -22,8 +22,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
-  final _schoolCtrl = TextEditingController(text: 'مدرستي');
   final _nameCtrl = TextEditingController(text: 'مالك النظام');
+  final _phoneCtrl = TextEditingController();
   bool _setup = false;
   bool _obscure = true;
   String? _error;
@@ -55,7 +55,12 @@ class _LoginScreenState extends State<LoginScreen> {
         final school = await _loadSchool(user['school_id'] as String?);
         if (school != null) state.setSchool(school['id'], school['name']);
         if (!mounted) return;
-        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const DashboardScreen()));
+        final owner = state.isPlatformOwner;
+        final student = state.isStudent;
+        Navigator.of(context).pushReplacement(MaterialPageRoute(
+            builder: (_) => owner
+                ? const PlatformDashboardScreen()
+                : (student ? const StudentHomeScreen() : const DashboardScreen())));
       }
     } catch (e) {
       setState(() => _error = 'حدث خطأ: $e');
@@ -69,64 +74,21 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _error = 'أدخل اسم مستخدم وكلمة مرور لا تقل عن 6 أحرف');
       return;
     }
-    final db = await AppDatabase.instance.database;
-    final schoolId = const Uuid().v4();
-    final now = DateTime.now().toUtc().toIso8601String();
-    await db.insert('schools', {
-      'id': schoolId,
-      'name': _schoolCtrl.text.trim().isEmpty ? 'مدرستي' : _schoolCtrl.text.trim(),
-      'timezone': AppConfig.timezone,
-      'is_active': 1,
-      'created_at': now,
-      'updated_at': now,
-    });
-
-    // إعدادات دوام افتراضية
-    await db.insert('attendance_settings', {
-      'id': const Uuid().v4(),
-      'school_id': schoolId,
-      'scope': 'school',
-      'day_start': '07:30',
-      'day_end': '13:30',
-      'checkin_window_start': '07:00',
-      'checkin_window_end': '07:45',
-      'late_after': '07:30',
-      'auto_close_time': '08:00',
-      'working_days': '[0,1,2,3,4]',
-      'created_at': now,
-      'updated_at': now,
-    });
-
-    // سنة دراسية حالية
-    final yearId = const Uuid().v4();
-    final y = DateTime.now().year;
-    await db.insert('academic_years', {
-      'id': yearId,
-      'school_id': schoolId,
-      'name': '$y/${y + 1}',
-      'start_date': '$y-09-01',
-      'end_date': '${y + 1}-06-30',
-      'is_current': 1,
-      'created_at': now,
-      'updated_at': now,
-    });
-
-    // حساب المالك الثابت
+    // المالك = مدير المنصة. لا يُنشأ أي مدرسة هنا؛ المالك ينشئ المدارس لاحقاً.
     await AuthRepository().createUser(
       username: _userCtrl.text.trim(),
       password: _passCtrl.text,
-      fullName: _nameCtrl.text.trim(),
-      schoolId: schoolId,
+      fullName: _nameCtrl.text.trim().isEmpty ? 'مالك المنصة' : _nameCtrl.text.trim(),
+      phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+      schoolId: null,
       roleCode: Roles.owner,
     );
 
     final user = await AuthRepository().login(_userCtrl.text.trim(), _passCtrl.text);
-    if (user != null) {
-      state.setSession(user);
-      state.setSchool(schoolId, _schoolCtrl.text.trim());
-    }
+    if (user != null) state.setSession(user);
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const DashboardScreen()));
+    Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const PlatformDashboardScreen()));
   }
 
   Future<Map<String, dynamic>?> _loadSchool(String? id) async {
@@ -154,26 +116,29 @@ class _LoginScreenState extends State<LoginScreen> {
                     const Icon(Icons.school, size: 64, color: AppTheme.primary),
                     const SizedBox(height: 12),
                     Text(
-                      _setup ? 'التهيئة الأولى للنظام' : 'تسجيل الدخول',
+                      _setup ? 'تهيئة النظام — حساب المالك' : 'تسجيل الدخول',
                       textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      _setup ? 'أنشئ حساب المالك الثابت الذي يدير التطبيق بالكامل' : 'أدخل بياناتك للمتابعة',
+                      _setup
+                          ? 'المالك هو مدير المنصة: ينشئ المدارس ومديريها لاحقاً'
+                          : 'أدخل بياناتك للمتابعة',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: AppTheme.textMuted),
                     ),
                     const SizedBox(height: 24),
                     if (_setup) ...[
                       TextField(
-                        controller: _schoolCtrl,
-                        decoration: const InputDecoration(labelText: 'اسم المدرسة', prefixIcon: Icon(Icons.apartment)),
+                        controller: _nameCtrl,
+                        decoration: const InputDecoration(labelText: 'الاسم الكامل', prefixIcon: Icon(Icons.person)),
                       ),
                       const SizedBox(height: 12),
                       TextField(
-                        controller: _nameCtrl,
-                        decoration: const InputDecoration(labelText: 'الاسم الكامل', prefixIcon: Icon(Icons.person)),
+                        controller: _phoneCtrl,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(labelText: 'رقم الهاتف (اختياري)', prefixIcon: Icon(Icons.phone)),
                       ),
                       const SizedBox(height: 12),
                     ],

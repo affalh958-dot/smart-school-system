@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_state.dart';
@@ -23,8 +24,11 @@ import 'camera_utils.dart';
 ///     يكتشف النظام الوجه باستمرار، وبمجرد ثبات الوجه يسجّله وينتقل فوراً
 ///     للطالب التالي — دون أي ضغط زر. مناسب لتسجيل آلاف الطلاب بسرعة.
 class FaceEnrollScreen extends StatefulWidget {
-  const FaceEnrollScreen({super.key, this.initialSectionId});
+  const FaceEnrollScreen({super.key, this.initialSectionId, this.studentId});
   final String? initialSectionId;
+
+  /// عند تمريره: تُفتح الشاشة على هذا الطالب مباشرةً (تسجيل/تحديث بصمته).
+  final String? studentId;
 
   @override
   State<FaceEnrollScreen> createState() => _FaceEnrollScreenState();
@@ -132,7 +136,10 @@ class _FaceEnrollScreenState extends State<FaceEnrollScreen> {
     setState(() {
       _students = students;
       _enrolled = enrolled;
-      _index = _firstPendingIndex();
+      // عند تحديد طالبٍ ما (تسجيل/تحديث بصمته) نضعه أولاً.
+      final target = widget.studentId;
+      final idx = target == null ? -1 : students.indexWhere((s) => s.id == target);
+      _index = idx >= 0 ? idx : _firstPendingIndex();
     });
   }
 
@@ -278,6 +285,36 @@ class _FaceEnrollScreenState extends State<FaceEnrollScreen> {
       final face = faces.first;
       final crop = CameraUtils.cropBox(decoded, face.boundingBox.left, face.boundingBox.top,
           face.boundingBox.width, face.boundingBox.height);
+      if (crop == null) throw StateError('تعذّر قصّ منطقة الوجه');
+      await _enrollCurrent(student, crop);
+    } catch (e) {
+      _snack('$e', AppTheme.danger);
+    } finally {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  /// تسجيل بصمة الطالب من صورة مرفوعة من المعرض (أو التقاط جديد)،
+  /// مع كشف الوجه وقصّه واستخراج السمات — دون إنترنت.
+  Future<void> _pickImageForCurrent() async {
+    final student = _current;
+    if (student == null) return;
+    setState(() => _capturing = true);
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1600);
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) throw StateError('تعذّر قراءة الصورة المرفوعة');
+      final faces = await _detector.processImage(InputImage.fromFilePath(picked.path));
+      if (faces.isEmpty) throw StateError('لم يُكشف وجه واضح في الصورة. اختر صورة أوضح للوجه.');
+      var best = faces.first;
+      for (final f in faces) {
+        if (f.boundingBox.width > best.boundingBox.width) best = f;
+      }
+      final crop = CameraUtils.cropBox(decoded, best.boundingBox.left, best.boundingBox.top,
+          best.boundingBox.width, best.boundingBox.height);
       if (crop == null) throw StateError('تعذّر قصّ منطقة الوجه');
       await _enrollCurrent(student, crop);
     } catch (e) {
@@ -473,6 +510,12 @@ class _FaceEnrollScreenState extends State<FaceEnrollScreen> {
                 ),
               ),
             ]),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: (_current == null) ? null : _pickImageForCurrent,
+            icon: const Icon(Icons.photo_library),
+            label: const Text('رفع صورة الطالب لتسجيل البصمة'),
+          ),
           const SizedBox(height: 8),
           if (_current != null && _enrolled.contains(_current!.id))
             OutlinedButton.icon(

@@ -38,31 +38,43 @@ class Perms {
   static const auditRead = 'audit.read';
   static const tenantManage = 'tenant.manage';
 
+  /// صلاحية خاصّة: تغيير المعلم لصف/مادة غير مكلّف بها (استثناء إداري). تُمنح للمالك فقط.
+  static const gradeOverride = 'grade.override';
+
+  /// صلاحية التقييم الأسبوعي للطلاب.
+  static const evaluationWrite = 'evaluation.write';
+  static const evaluationRead = 'evaluation.read';
+
   /// خريطة الصلاحيات لكل دور (مطابقة لجدول role_permissions في قاعدة البيانات).
   static const Map<String, List<String>> byRole = {
     Roles.owner: [
       dashboardRead, studentRead, studentWrite, studentDelete, attendanceRead,
       attendanceWrite, attendanceScreen, gradeRead, gradeWrite, reportRead,
       userManage, settingsManage, biometricManage, deviceManage, backupManage,
-      auditRead, tenantManage,
+      auditRead, tenantManage, gradeOverride, evaluationRead, evaluationWrite,
     ],
     Roles.admin: [
       dashboardRead, studentRead, studentWrite, studentDelete, attendanceRead,
       attendanceWrite, attendanceScreen, gradeRead, gradeWrite, reportRead,
       userManage, settingsManage, biometricManage, deviceManage, backupManage,
-      auditRead,
+      auditRead, gradeOverride, evaluationRead, evaluationWrite,
     ],
     Roles.manager: [
-      dashboardRead, studentRead, studentWrite, attendanceRead, attendanceWrite,
-      gradeRead, reportRead, auditRead, settingsManage,
+      dashboardRead, studentRead, studentWrite, studentDelete, attendanceRead,
+      attendanceWrite, attendanceScreen, gradeRead, gradeWrite, reportRead, auditRead,
+      settingsManage, userManage, biometricManage, deviceManage,
+      evaluationRead, evaluationWrite,
     ],
     Roles.attendance: [
       dashboardRead, studentRead, attendanceRead, attendanceWrite,
-      attendanceScreen, reportRead,
+      attendanceScreen, reportRead, evaluationRead,
     ],
-    Roles.teacher: [studentRead, gradeRead, gradeWrite, attendanceRead],
-    Roles.student: [gradeRead, attendanceRead],
-    Roles.guardian: [attendanceRead, gradeRead],
+    Roles.teacher: [
+      studentRead, studentWrite, gradeRead, gradeWrite, attendanceRead, biometricManage,
+      evaluationRead, evaluationWrite,
+    ],
+    Roles.student: [gradeRead, attendanceRead, evaluationRead],
+    Roles.guardian: [attendanceRead, gradeRead, evaluationRead],
   };
 
   static bool roleHas(String roleCode, String permission) =>

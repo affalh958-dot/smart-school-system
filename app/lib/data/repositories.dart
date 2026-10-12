@@ -125,6 +125,62 @@ class StudentRepository {
   /// بحث فوري بالرقم المدرسي (للبحث عند الحضور أو عرض سريع).
   Future<Student?> byNumberExact(String schoolId, String number) => byNumber(schoolId, number);
 
+  /// الطلاب النشطون في شعبة، مع حالة التسجيل الحيوي (للتحقق قبل الترحيل).
+  Future<List<Map<String, dynamic>>> activeBySection(String sectionId) async {
+    final db = await AppDatabase.instance.database;
+    return db.rawQuery('''
+      SELECT s.id, s.student_number, s.full_name, s.gender, s.section_id
+      FROM students s
+      WHERE s.section_id = ? AND s.status = 'active' AND s.deleted_at IS NULL
+      ORDER BY s.full_name
+    ''', [sectionId]);
+  }
+
+  /// ترحيل نهاية السنة: نقل قائمة طلاب إلى شعبة جديدة، أو إبقاؤهم مكانهم.
+  /// يعمل داخل معاملة واحدة ويوثّق كل حركة في student_movements.
+  Future<void> promoteForNewYear({
+    required String schoolId,
+    required String newAcademicYearId,
+    required Map<String, String> moves, // studentId -> toSectionId
+    String? movedBy,
+    String? reason,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.transaction((txn) async {
+      for (final entry in moves.entries) {
+        final studentId = entry.key;
+        final toSectionId = entry.value;
+        final rows = await txn.query('students',
+            columns: ['section_id'], where: 'id = ?', whereArgs: [studentId], limit: 1);
+        if (rows.isEmpty) continue;
+        final fromSection = rows.first['section_id'] as String?;
+        await txn.update(
+          'students',
+          {
+            'section_id': toSectionId,
+            'academic_year_id': newAcademicYearId,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [studentId],
+        );
+        await txn.insert('student_movements', {
+          'id': _uuid.v4(),
+          'student_id': studentId,
+          'from_section': fromSection,
+          'to_section': toSectionId,
+          'academic_year_id': newAcademicYearId,
+          'moved_at': now,
+          'moved_by': movedBy,
+          'reason': reason ?? 'ترحيل نهاية السنة',
+          'created_at': now,
+          'updated_at': now,
+        });
+      }
+    });
+  }
+
   /// أرشفة (حذف منطقي) — لا حذف فعلي للسجلات التاريخية.
   Future<void> archive(String studentId) async {
     final db = await AppDatabase.instance.database;
@@ -142,9 +198,11 @@ class AuthRepository {
     required String username,
     required String password,
     required String fullName,
+    String? phone,
     String? schoolId,
     required String roleCode,
     String? teacherId,
+    String? studentId,
   }) async {
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toUtc().toIso8601String();
@@ -159,8 +217,10 @@ class AuthRepository {
         'password_hash': hash,
         'password_salt': salt,
         'full_name': fullName,
+        'phone': phone,
         'is_active': 1,
         'teacher_id': teacherId,
+        'student_id': studentId,
         'created_at': now,
         'updated_at': now,
       });
@@ -195,9 +255,47 @@ class AuthRepository {
       'id': u['id'],
       'username': u['username'],
       'full_name': u['full_name'],
+      'phone': u['phone'],
       'school_id': u['school_id'],
+      'student_id': u['student_id'],
       'roles': roleCodes,
     };
+  }
+
+  /// بيانات الحسابات في مدرسة (اسم المستخدم، الدور) — لاطلاع المالك/المدير.
+  Future<List<Map<String, dynamic>>> usersOfSchool(String schoolId) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery('''
+      SELECT u.id, u.username, u.full_name, u.phone, u.is_active,
+             GROUP_CONCAT(r.code) AS role_codes
+      FROM users u
+      LEFT JOIN user_roles ur ON ur.user_id = u.id
+      LEFT JOIN roles r ON r.id = ur.role_id
+      WHERE u.school_id = ? AND u.deleted_at IS NULL
+      GROUP BY u.id
+      ORDER BY u.created_at
+    ''', [schoolId]);
+    return rows;
+  }
+
+  /// إعادة تعيين كلمة مرور مستخدم (يُسجَّل في سجل التدقيق من الطبقة المستدعية).
+  Future<void> resetPassword(String userId, String newPassword) async {
+    final db = await AppDatabase.instance.database;
+    final salt = Security.generateSalt();
+    final hash = Security.hashPassword(newPassword, salt);
+    await db.update('users',
+        {'password_salt': salt, 'password_hash': hash, 'updated_at': DateTime.now().toUtc().toIso8601String()},
+        where: 'id = ?', whereArgs: [userId]);
+  }
+
+  /// تحديث بيانات مستخدم (الاسم/الهاتف/التفعيل).
+  Future<void> updateUser(String userId, {String? fullName, String? phone, int? isActive}) async {
+    final db = await AppDatabase.instance.database;
+    final data = <String, dynamic>{'updated_at': DateTime.now().toUtc().toIso8601String()};
+    if (fullName != null) data['full_name'] = fullName;
+    if (phone != null) data['phone'] = phone;
+    if (isActive != null) data['is_active'] = isActive;
+    await db.update('users', data, where: 'id = ?', whereArgs: [userId]);
   }
 
   Future<bool> hasAnyUser() async {

@@ -135,7 +135,42 @@ class ReportsRepository {
     ''', [examId]);
   }
 
-  /// عدّاد سريع لعدد السجلات (للتحقق من الأداء مع أعداد كبيرة).
+  /// تقرير التقييمات الأسبوعية في نطاق زمني (حسب تاريخ إنشاء التقييم).
+  Future<List<Map<String, dynamic>>> evaluationsBySubject(String schoolId, String from, String to) async {
+    final db = await AppDatabase.instance.database;
+    return db.rawQuery('''
+      SELECT s.student_number, s.full_name, sub.name AS subject_name,
+             we.week_no, we.score, we.max_score, we.comment,
+             g.name AS grade_name, sec.name AS section_name
+      FROM weekly_evaluations we
+      JOIN students s ON s.id = we.student_id
+      JOIN subjects sub ON sub.id = we.subject_id
+      LEFT JOIN sections sec ON sec.id = s.section_id
+      LEFT JOIN grades g ON g.id = sec.grade_id
+      WHERE we.school_id = ? AND we.deleted_at IS NULL
+        AND date(we.created_at) BETWEEN ? AND ?
+      ORDER BY g.name, sec.name, s.full_name, sub.name, we.week_no
+    ''', [schoolId, from, to]);
+  }
+
+  /// متوسط التقييم التراكمي لكل طالب في المدرسة (نسبة مئوية).
+  Future<List<Map<String, dynamic>>> cumulativeEvaluationSummary(String schoolId) async {
+    final db = await AppDatabase.instance.database;
+    return db.rawQuery('''
+      SELECT s.student_number, s.full_name, g.name AS grade_name, sec.name AS section_name,
+             COUNT(we.id) AS weeks,
+             ROUND(SUM(we.score * we.weight) / NULLIF(SUM(we.weight * we.max_score), 0) * 100, 1) AS avg_pct
+      FROM students s
+      LEFT JOIN sections sec ON sec.id = s.section_id
+      LEFT JOIN grades g ON g.id = sec.grade_id
+      LEFT JOIN weekly_evaluations we ON we.student_id = s.id AND we.deleted_at IS NULL
+      WHERE s.school_id = ? AND s.deleted_at IS NULL AND s.status = 'active'
+      GROUP BY s.id
+      HAVING weeks > 0
+      ORDER BY avg_pct DESC
+    ''', [schoolId]);
+  }
+
   Future<int> countAttendance(String schoolId) async {
     final db = await AppDatabase.instance.database;
     final r = await db.rawQuery('''

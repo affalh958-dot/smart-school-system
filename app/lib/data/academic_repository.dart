@@ -176,7 +176,8 @@ class AcademicRepository {
 
   Future<List<Map<String, dynamic>>> assignments(String schoolId, String academicYearId) async {
     return (await _db).rawQuery('''
-      SELECT a.id, t.full_name AS teacher_name, sub.name AS subject_name, sec.name AS section_name
+      SELECT a.id, a.section_id, a.subject_id, t.full_name AS teacher_name,
+             sub.name AS subject_name, sec.name AS section_name
       FROM teacher_assignments a
       JOIN teachers t ON t.id = a.teacher_id
       JOIN subjects sub ON sub.id = a.subject_id
@@ -186,5 +187,30 @@ class AcademicRepository {
       WHERE st.school_id = ? AND a.academic_year_id = ? AND a.deleted_at IS NULL
       ORDER BY t.full_name
     ''', [schoolId, academicYearId]);
+  }
+
+  /// الشعب المكلّف بها معلّم معيّن (لتقييد إدخال الدرجات/التقييمات).
+  Future<List<Map<String, dynamic>>> sectionsForTeacher(String teacherId, String academicYearId) async {
+    return (await _db).rawQuery('''
+      SELECT DISTINCT sec.id, sec.name, g.name AS grade_name, st.name AS stage_name
+      FROM teacher_assignments a
+      JOIN sections sec ON sec.id = a.section_id
+      JOIN grades g ON g.id = sec.grade_id
+      JOIN stages st ON st.id = g.stage_id
+      WHERE a.teacher_id = ? AND a.academic_year_id = ? AND a.deleted_at IS NULL
+      ORDER BY st.name, g.name, sec.name
+    ''', [teacherId, academicYearId]);
+  }
+
+  /// المواد المكلّف بها معلّم في شعبة معيّنة.
+  Future<List<Map<String, dynamic>>> subjectsForTeacher(
+      String teacherId, String sectionId, String academicYearId) async {
+    return (await _db).rawQuery('''
+      SELECT DISTINCT sub.id, sub.name
+      FROM teacher_assignments a
+      JOIN subjects sub ON sub.id = a.subject_id
+      WHERE a.teacher_id = ? AND a.section_id = ? AND a.academic_year_id = ? AND a.deleted_at IS NULL
+      ORDER BY sub.name
+    ''', [teacherId, sectionId, academicYearId]);
   }
 }

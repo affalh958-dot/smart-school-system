@@ -5,7 +5,7 @@ import '../../core/app_state.dart';
 import '../../core/theme.dart';
 import '../../data/academic_repository.dart';
 import '../../data/database.dart';
-import 'students_screen.dart';
+import 'class_roster_screen.dart';
 import 'face_enroll_screen.dart';
 
 /// شاشة «الصفوف» — كل صف بطاقة؛ عند الضغط تُعرض شعبه، ولكل شعبة طلابها.
@@ -97,6 +97,7 @@ class _ClassesScreenState extends State<ClassesScreen> {
 
   Widget _sectionTile(Map<String, dynamic> sec) {
     final count = (sec['student_count'] as int?) ?? 0;
+    final label = '${sec['stage_name']} / ${sec['grade_name']} / ${sec['name']}';
     return ListTile(
       dense: true,
       leading: const Icon(Icons.meeting_room, color: AppTheme.accent),
@@ -104,11 +105,12 @@ class _ClassesScreenState extends State<ClassesScreen> {
       subtitle: Text('$count طالب'),
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(
-          tooltip: 'الطلاب',
+          tooltip: 'كشف الصف',
           icon: const Icon(Icons.people, color: AppTheme.primary),
           onPressed: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const StudentsScreen()),
+            MaterialPageRoute(
+                builder: (_) => ClassRosterScreen(sectionId: sec['id'] as String, title: label)),
           ),
         ),
         IconButton(
@@ -120,6 +122,11 @@ class _ClassesScreenState extends State<ClassesScreen> {
           ),
         ),
       ]),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ClassRosterScreen(sectionId: sec['id'] as String, title: label)),
+      ),
     );
   }
 }

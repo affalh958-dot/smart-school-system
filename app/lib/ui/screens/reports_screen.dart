@@ -39,6 +39,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
     'failed': 'الحالات التي فشل فيها التعرّف',
     'devices': 'الأجهزة التي سجّلت الحضور',
     'audit': 'سجل تعديلات الحضور',
+    'eval_range': 'تقييمات أسبوعية (نطاق زمني)',
+    'eval_cumulative': 'المعدّل التراكمي لكل طالب',
   };
 
   @override
@@ -96,6 +98,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
         break;
       case 'audit':
         rows = await _repo.attendanceAudit(_schoolId, 500);
+        break;
+      case 'eval_range':
+        rows = await _repo.evaluationsBySubject(_schoolId, from, to);
+        break;
+      case 'eval_cumulative':
+        rows = await _repo.cumulativeEvaluationSummary(_schoolId);
         break;
       default:
         rows = [];
@@ -174,6 +182,26 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ReportColumn(title: 'إلى', value: (r) => _statusLabel('${r['new_status']}')),
           ReportColumn(title: 'بواسطة', value: (r) => '${r['changed_by_name'] ?? '-'}'),
           ReportColumn(title: 'السبب', value: (r) => '${r['reason']}'),
+        ];
+      case 'eval_range':
+        return [
+          ReportColumn(title: 'الرقم', value: (r) => '${r['student_number']}'),
+          ReportColumn(title: 'الاسم', value: (r) => '${r['full_name']}'),
+          ReportColumn(title: 'الصف', value: (r) => '${r['grade_name'] ?? '-'}'),
+          ReportColumn(title: 'الشعبة', value: (r) => '${r['section_name'] ?? '-'}'),
+          ReportColumn(title: 'المادة', value: (r) => '${r['subject_name']}'),
+          ReportColumn(title: 'الأسبوع', value: (r) => '${r['week_no']}'),
+          ReportColumn(title: 'الدرجة', value: (r) => '${r['score']} / ${r['max_score']}'),
+          ReportColumn(title: 'ملاحظة', value: (r) => '${r['comment'] ?? ''}'),
+        ];
+      case 'eval_cumulative':
+        return [
+          ReportColumn(title: 'الرقم', value: (r) => '${r['student_number']}'),
+          ReportColumn(title: 'الاسم', value: (r) => '${r['full_name']}'),
+          ReportColumn(title: 'الصف', value: (r) => '${r['grade_name'] ?? '-'}'),
+          ReportColumn(title: 'الشعبة', value: (r) => '${r['section_name'] ?? '-'}'),
+          ReportColumn(title: 'عدد الأسابيع', value: (r) => '${r['weeks']}'),
+          ReportColumn(title: 'المعدّل %', value: (r) => '${r['avg_pct'] ?? '-'}'),
         ];
       default:
         return [];

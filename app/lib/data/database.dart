@@ -53,7 +53,7 @@ class AppDatabase {
   Future<Database> _create(String dbPath, String schema) async {
     return openDatabase(
       dbPath,
-      version: 3,
+      version: 4,
       onConfigure: (d) async {
         await d.execute('PRAGMA foreign_keys = ON');
       },
@@ -113,6 +113,37 @@ class AppDatabase {
           ''');
           await d.execute('CREATE INDEX IF NOT EXISTS idx_sav_student ON student_attribute_values(student_id)');
           await d.execute('CREATE INDEX IF NOT EXISTS idx_sav_column  ON student_attribute_values(column_id)');
+        }
+        // ترحيل 3 → 4: الحالة الصحية، ربط حساب الطالب، والتقييم الأسبوعي التراكمي.
+        if (oldVersion < 4) {
+          await _addColumnIfMissing(d, 'students', 'health_status TEXT');
+          await _addColumnIfMissing(d, 'students', 'user_id TEXT');
+          await _addColumnIfMissing(d, 'users', 'phone TEXT');
+          await _addColumnIfMissing(d, 'users', 'student_id TEXT');
+          await d.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_evaluations (
+              id               TEXT PRIMARY KEY,
+              school_id        TEXT NOT NULL,
+              student_id       TEXT NOT NULL,
+              subject_id       TEXT NOT NULL,
+              section_id       TEXT,
+              academic_year_id TEXT,
+              teacher_id       TEXT,
+              week_no          INTEGER NOT NULL,
+              week_start       TEXT,
+              score            REAL,
+              max_score        REAL NOT NULL DEFAULT 10,
+              weight           REAL NOT NULL DEFAULT 1,
+              comment          TEXT,
+              evaluated_by     TEXT,
+              created_at       TEXT NOT NULL,
+              updated_at       TEXT NOT NULL,
+              deleted_at       TEXT,
+              UNIQUE (student_id, subject_id, academic_year_id, week_no)
+            )
+          ''');
+          await d.execute('CREATE INDEX IF NOT EXISTS idx_eval_student ON weekly_evaluations(student_id, academic_year_id)');
+          await d.execute('CREATE INDEX IF NOT EXISTS idx_eval_school  ON weekly_evaluations(school_id, week_no)');
         }
       },
       onOpen: (d) async {
