@@ -8,12 +8,14 @@ import 'package:provider/provider.dart';
 
 import '../../core/app_state.dart';
 import '../../core/config.dart';
+import '../../core/permissions.dart';
 import '../../core/theme.dart';
 import '../../data/attendance_repository.dart';
 import '../../data/database.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
 import 'camera_utils.dart';
+import 'student_profile_screen.dart';
 
 /// شاشة الحضور المستمرة — أهم ميزة في النظام.
 ///
@@ -166,12 +168,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       if (result.outcome == RecordOutcome.recorded) {
         _successCount++;
-        await _students.byId(studentId); // تحقق
         if (mounted) {
+          final profile = await _students.fullProfile(studentId);
+          if (!mounted) return;
           setState(() {
             _last = _LastResult(
+              studentId: studentId,
               name: student.fullName,
               number: student.studentNumber,
+              section: _sectionLabel(profile),
+              guardianPhone: profile?['guardian_phone'] as String?,
+              residence: profile?['residence'] as String?,
+              notes: profile?['notes'] as String?,
               status: _statusFor(now),
               time: now,
               confidence: match.score,
@@ -182,6 +190,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         if (mounted) {
           setState(() {
             _last = _LastResult(
+              studentId: studentId,
               name: student.fullName,
               number: student.studentNumber,
               status: 'duplicate',
@@ -267,6 +276,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       appBar: AppBar(
         title: const Text('شاشة الحضور'),
         actions: [
+          if (context.read<AppState>().can(Perms.attendanceWrite))
+            IconButton(
+              tooltip: 'تسجيل يدوي',
+              icon: const Icon(Icons.edit_note),
+              onPressed: _manualEntry,
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(
@@ -391,27 +406,112 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: color, width: 2),
       ),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       child: Row(
         children: [
-          Icon(isDup ? Icons.info : Icons.check_circle, color: color, size: 48),
-          const SizedBox(width: 14),
+          Icon(isDup ? Icons.info : Icons.check_circle, color: color, size: 44),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 15)),
-                const SizedBox(height: 4),
-                Text(r.name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                Text('الرقم: ${r.number}  •  ${_fmt(r.time)}',
-                    style: const TextStyle(color: AppTheme.textMuted)),
+                Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 2),
+                Text(r.name, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+                Text('الرقم: ${r.number}${r.section != null ? '  •  ${r.section}' : ''}',
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                if (r.guardianPhone != null || r.residence != null)
+                  Text(
+                    'ولي الأمر: ${r.guardianPhone ?? '-'}  •  السكن: ${r.residence ?? '-'}',
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                  ),
+                Text('الوقت: ${_fmt(r.time)}  •  الثقة: ${(r.confidence * 100).round()}%',
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
               ],
             ),
+          ),
+          if (r.studentId != null)
+            IconButton(
+              tooltip: 'ملف الطالب',
+              icon: const Icon(Icons.open_in_new, color: AppTheme.primary),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => StudentProfileScreen(studentId: r.studentId!)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String? _sectionLabel(Map<String, dynamic>? p) {
+    if (p == null) return null;
+    final parts = [p['grade_name'], p['section_name']].where((e) => e != null).toList();
+    return parts.isEmpty ? null : parts.join(' / ');
+  }
+
+  /// وضع يدوي بديل: تسجيل حضور طالب بحثاً بالرقم المدرسي.
+  Future<void> _manualEntry() async {
+    final state = context.read<AppState>();
+    if (state.schoolId == null) return;
+    final ctrl = TextEditingController();
+    final student = await showDialog<Student>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تسجيل حضور يدوي'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'الرقم المدرسي', prefixIcon: Icon(Icons.tag)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () async {
+              final s = await _students.byNumber(state.schoolId!, ctrl.text.trim());
+              if (ctx.mounted) Navigator.pop(ctx, s);
+            },
+            child: const Text('بحث'),
           ),
         ],
       ),
     );
+    if (student == null) {
+      _snack('لم يتم العثور على الطالب بهذا الرقم');
+      return;
+    }
+    final now = DateTime.now();
+    final result = await _attendance.record(
+      studentId: student.id,
+      sessionType: 'morning',
+      status: _statusFor(now),
+      source: 'manual',
+      deviceId: state.deviceId,
+      schoolId: state.schoolId,
+    );
+    if (!mounted) return;
+    if (result.outcome == RecordOutcome.recorded) {
+      _successCount++;
+      setState(() {
+        _last = _LastResult(
+          studentId: student.id,
+          name: student.fullName,
+          number: student.studentNumber,
+          status: _statusFor(now),
+          time: now,
+          confidence: 1.0,
+        );
+      });
+    } else {
+      _snack(result.message);
+    }
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
   String _fmt(DateTime t) =>
@@ -419,10 +519,26 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 }
 
 class _LastResult {
+  final String? studentId;
   final String name;
   final String number;
+  final String? section;
+  final String? guardianPhone;
+  final String? residence;
+  final String? notes;
   final String status;
   final DateTime time;
   final double confidence;
-  _LastResult({required this.name, required this.number, required this.status, required this.time, required this.confidence});
+  _LastResult({
+    this.studentId,
+    required this.name,
+    required this.number,
+    this.section,
+    this.guardianPhone,
+    this.residence,
+    this.notes,
+    required this.status,
+    required this.time,
+    required this.confidence,
+  });
 }

@@ -8,11 +8,13 @@ import '../../data/attendance_repository.dart';
 import '../../data/repositories.dart';
 import 'attendance_screen.dart';
 import 'academic_screen.dart';
+import 'classes_screen.dart';
 import 'face_enroll_screen.dart';
 import 'grades_screen.dart';
 import 'login_screen.dart';
 import 'reports_screen.dart';
 import 'settings_screen.dart';
+import 'student_columns_screen.dart';
 import 'students_screen.dart';
 import 'users_screen.dart';
 import 'schools_screen.dart';
@@ -196,6 +198,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (state.can(Perms.studentRead)) {
       list.add(_MenuItem('الطلاب', 'إضافة وبحث وتعديل ملفات الطلاب', Icons.people, AppTheme.accent,
           () => _push(const StudentsScreen())));
+    }
+    if (state.can(Perms.studentRead)) {
+      list.add(_MenuItem('الصفوف والشعب', 'تصفح الصفوف، ولكل شعبة طلابها ووجوهها', Icons.school, AppTheme.primary,
+          () => _push(const ClassesScreen())));
+    }
+    if (state.can(Perms.settingsManage)) {
+      list.add(_MenuItem('حقول ملف الطالب', 'إضافة حقول مخصّصة (هوية، سكن، ملاحظات...)', Icons.edit_note, AppTheme.accent,
+          () => _push(const StudentColumnsScreen())));
     }
     if (state.can(Perms.settingsManage)) {
       list.add(_MenuItem('الهيكل المدرسي', 'المراحل والصفوف والشعب والمدرسون والمواد', Icons.account_tree, AppTheme.primary,

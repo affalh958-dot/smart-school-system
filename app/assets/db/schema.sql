@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS students (
   status           TEXT NOT NULL DEFAULT 'active',
   address          TEXT,
   notes            TEXT,
+  national_id      TEXT,
+  student_phone    TEXT,
+  guardian_name    TEXT,
+  guardian_phone   TEXT,
+  residence        TEXT,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   deleted_at       TEXT,
@@ -507,3 +512,34 @@ INSERT OR IGNORE INTO permissions (id, code, name_ar, created_at, updated_at) VA
   ('perm-device-manage',    'device.manage',     'إدارة الأجهزة',       datetime('now'), datetime('now')),
   ('perm-backup-manage',    'backup.manage',     'النسخ الاحتياطي',     datetime('now'), datetime('now')),
   ('perm-audit-read',       'audit.read',        'عرض سجل العمليات',    datetime('now'), datetime('now'));
+
+-- ---------------------------------------------------------------------------
+-- سمات الطلاب القابلة للتخصيص (EAV): صفوف/حقول إضافية يحدّدها المدير بنفسه.
+-- تُخزَّن القيم مع نوعها، وتُتحقَّق من الصلاحية في طبقة المستودع.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS student_columns (
+  id          TEXT PRIMARY KEY,
+  school_id   TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  key         TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  data_type   TEXT NOT NULL DEFAULT 'text',
+  is_required INTEGER NOT NULL DEFAULT 0,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  deleted_at  TEXT,
+  UNIQUE (school_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS student_attribute_values (
+  id             TEXT PRIMARY KEY,
+  student_id     TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  column_id      TEXT NOT NULL REFERENCES student_columns(id) ON DELETE CASCADE,
+  value          TEXT,
+  value_number   REAL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  UNIQUE (student_id, column_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sav_student ON student_attribute_values(student_id);
+CREATE INDEX IF NOT EXISTS idx_sav_column  ON student_attribute_values(column_id);

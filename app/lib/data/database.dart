@@ -53,7 +53,7 @@ class AppDatabase {
   Future<Database> _create(String dbPath, String schema) async {
     return openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onConfigure: (d) async {
         await d.execute('PRAGMA foreign_keys = ON');
       },
@@ -64,14 +64,56 @@ class AppDatabase {
         }
       },
       onUpgrade: (d, oldVersion, newVersion) async {
-        // ترحيل آمن من 1 → 2: إضافة عزل المدرسة لسجلات التعرّف ومحاولات المراجعة.
-        // نتحقق من وجود العمود أولاً حتى لا يفشل إن كان مضافاً مسبقاً.
-        await _addColumnIfMissing(d, 'recognition_attempts', 'school_id TEXT REFERENCES schools(id)');
-        await _addColumnIfMissing(d, 'recognition_reviews', 'school_id TEXT REFERENCES schools(id)');
-        try {
-          await d.execute('CREATE INDEX IF NOT EXISTS idx_attempts_school ON recognition_attempts(school_id, attempted_at)');
-          await d.execute('CREATE INDEX IF NOT EXISTS idx_reviews_school ON recognition_reviews(school_id, status)');
-        } catch (_) {}
+        // ترحيل آمن 1 → 2: عزل المدرسة لسجلات التعرّف ومحاولات المراجعة.
+        if (oldVersion < 2) {
+          await _addColumnIfMissing(d, 'recognition_attempts', 'school_id TEXT REFERENCES schools(id)');
+          await _addColumnIfMissing(d, 'recognition_reviews', 'school_id TEXT REFERENCES schools(id)');
+          try {
+            await d.execute('CREATE INDEX IF NOT EXISTS idx_attempts_school ON recognition_attempts(school_id, attempted_at)');
+            await d.execute('CREATE INDEX IF NOT EXISTS idx_reviews_school ON recognition_reviews(school_id, status)');
+          } catch (_) {}
+        }
+        // ترحيل 2 → 3: حقول ملف الطالب الإضافية + جداول الحقول المخصّصة (EAV).
+        if (oldVersion < 3) {
+          for (final col in const [
+            'national_id TEXT',
+            'student_phone TEXT',
+            'guardian_name TEXT',
+            'guardian_phone TEXT',
+            'residence TEXT',
+          ]) {
+            await _addColumnIfMissing(d, 'students', col);
+          }
+          await d.execute('''
+            CREATE TABLE IF NOT EXISTS student_columns (
+              id          TEXT PRIMARY KEY,
+              school_id   TEXT NOT NULL,
+              key         TEXT NOT NULL,
+              label       TEXT NOT NULL,
+              data_type   TEXT NOT NULL DEFAULT 'text',
+              is_required INTEGER NOT NULL DEFAULT 0,
+              order_index INTEGER NOT NULL DEFAULT 0,
+              created_at  TEXT NOT NULL,
+              updated_at  TEXT NOT NULL,
+              deleted_at  TEXT,
+              UNIQUE (school_id, key)
+            )
+          ''');
+          await d.execute('''
+            CREATE TABLE IF NOT EXISTS student_attribute_values (
+              id             TEXT PRIMARY KEY,
+              student_id     TEXT NOT NULL,
+              column_id      TEXT NOT NULL,
+              value          TEXT,
+              value_number   REAL,
+              created_at     TEXT NOT NULL,
+              updated_at     TEXT NOT NULL,
+              UNIQUE (student_id, column_id)
+            )
+          ''');
+          await d.execute('CREATE INDEX IF NOT EXISTS idx_sav_student ON student_attribute_values(student_id)');
+          await d.execute('CREATE INDEX IF NOT EXISTS idx_sav_column  ON student_attribute_values(column_id)');
+        }
       },
       onOpen: (d) async {
         await d.execute('PRAGMA foreign_keys = ON');

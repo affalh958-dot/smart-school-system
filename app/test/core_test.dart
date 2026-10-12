@@ -11,6 +11,7 @@ import 'package:school_app/data/database.dart';
 import 'package:school_app/data/grade_repository.dart';
 import 'package:school_app/data/models.dart';
 import 'package:school_app/data/repositories.dart';
+import 'package:school_app/data/student_columns_repository.dart';
 import 'package:school_app/face/face_index.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -117,6 +118,38 @@ void main() {
       await repo.create(Student(id: '', schoolId: schoolId, studentNumber: '1002', fullName: 'سارة علي'));
       final results = await repo.search(schoolId, 'سارة');
       expect(results.any((s) => s.studentNumber == '1002'), isTrue);
+    });
+
+    test('حفظ وعرض بيانات التواصل والسكن وملف كامل', () async {
+      final repo = StudentRepository();
+      final id = await repo.create(Student(
+        id: '',
+        schoolId: schoolId,
+        studentNumber: '1003',
+        fullName: 'حسين كريم',
+        guardianName: 'كريم حسين',
+        guardianPhone: '07701234567',
+        residence: 'الكرادة',
+      ));
+      final profile = await repo.fullProfile(id);
+      expect(profile, isNotNull);
+      expect(profile!['guardian_phone'], '07701234567');
+      expect(profile['residence'], 'الكرادة');
+    });
+
+    test('الحقول المخصّصة: تعريف حقل وحفظ قيمته للطالب', () async {
+      final colRepo = StudentColumnsRepository();
+      final students = StudentRepository();
+      final sid = await students.create(Student(
+          id: '', schoolId: schoolId, studentNumber: '1004', fullName: 'مريم صالح'));
+      final colId = await colRepo.addColumn(schoolId: schoolId, label: 'الدم', dataType: 'text');
+      await colRepo.setValues(sid, {colId: 'O+'});
+      final values = await colRepo.valuesForStudent(sid);
+      expect(values[colId], 'O+');
+      // تحديث القيمة لا يُنشئ صفاً مكرراً
+      await colRepo.setValues(sid, {colId: 'A+'});
+      final updated = await colRepo.valuesForStudent(sid);
+      expect(updated[colId], 'A+');
     });
   });
 

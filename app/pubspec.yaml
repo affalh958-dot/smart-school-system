@@ -58,6 +58,12 @@ dependencies:
   intl: ^0.20.2
   uuid: ^4.5.1
 
+  # التقارير والتصدير (يعمل دون إنترنت)
+  archive: ^4.0.0
+  pdf: ^3.11.1
+  printing: ^5.13.4
+  share_plus: ^10.1.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -79,7 +85,12 @@ flutter:
     - assets/models/mobilefacenet.tflite
     - assets/models/liveness_antispoof.tflite
     - assets/db/schema.sql
+    - assets/fonts/Roboto-Regular.ttf
 
+  fonts:
+    - family: NotoNaskhArabic
+      fonts:
+        - asset: assets/fonts/NotoNaskhArabic-Regular.ttf
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

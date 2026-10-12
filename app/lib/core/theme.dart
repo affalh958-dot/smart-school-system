@@ -17,6 +17,7 @@ class AppTheme {
   static ThemeData light() {
     final base = ThemeData(
       useMaterial3: true,
+      fontFamily: 'NotoNaskhArabic',
       colorScheme: ColorScheme.fromSeed(
         seedColor: primary,
         primary: primary,

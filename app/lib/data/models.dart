@@ -17,11 +17,19 @@ class Student {
   final String studentNumber;
   final String fullName;
   final String? gender;
+  final String? birthDate;
+  final String? address;
   final String? sectionId;
   final String? academicYearId;
   final String status;
   final String? photoPath;
   final String? notes;
+  final String? nationalId;
+  final String? studentPhone;
+  final String? guardianName;
+  final String? guardianPhone;
+  final String? residence;
+  final String? enrollmentDate;
 
   Student({
     required this.id,
@@ -29,11 +37,19 @@ class Student {
     required this.studentNumber,
     required this.fullName,
     this.gender,
+    this.birthDate,
+    this.address,
     this.sectionId,
     this.academicYearId,
     this.status = 'active',
     this.photoPath,
     this.notes,
+    this.nationalId,
+    this.studentPhone,
+    this.guardianName,
+    this.guardianPhone,
+    this.residence,
+    this.enrollmentDate,
   });
 
   factory Student.fromMap(Map<String, dynamic> m) => Student(
@@ -42,11 +58,19 @@ class Student {
         studentNumber: m['student_number'],
         fullName: m['full_name'],
         gender: m['gender'],
+        birthDate: m['birth_date'],
+        address: m['address'],
         sectionId: m['section_id'],
         academicYearId: m['academic_year_id'],
         status: m['status'] ?? 'active',
         photoPath: m['photo_path'],
         notes: m['notes'],
+        nationalId: m['national_id'],
+        studentPhone: m['student_phone'],
+        guardianName: m['guardian_name'],
+        guardianPhone: m['guardian_phone'],
+        residence: m['residence'],
+        enrollmentDate: m['enrollment_date'],
       );
 
   Map<String, dynamic> toMap() => {
@@ -55,11 +79,19 @@ class Student {
         'student_number': studentNumber,
         'full_name': fullName,
         'gender': gender,
+        'birth_date': birthDate,
+        'address': address,
         'section_id': sectionId,
         'academic_year_id': academicYearId,
         'status': status,
         'photo_path': photoPath,
         'notes': notes,
+        'national_id': nationalId,
+        'student_phone': studentPhone,
+        'guardian_name': guardianName,
+        'guardian_phone': guardianPhone,
+        'residence': residence,
+        'enrollment_date': enrollmentDate,
       };
 }
 

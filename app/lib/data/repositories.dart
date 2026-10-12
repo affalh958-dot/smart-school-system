@@ -99,6 +99,32 @@ class StudentRepository {
     });
   }
 
+  /// إحصاء الطلاب في شعبة.
+  Future<int> countBySection(String sectionId) async {
+    final db = await AppDatabase.instance.database;
+    final r = await db.rawQuery(
+        'SELECT COUNT(*) c FROM students WHERE section_id = ? AND deleted_at IS NULL', [sectionId]);
+    return Sqflite.firstIntValue(r) ?? 0;
+  }
+
+  /// ملف الطالب الكامل مع أسماء المرحلة/الصف/الشعبة (لعرض أنيق في وقت واحد).
+  Future<Map<String, dynamic>?> fullProfile(String studentId) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery('''
+      SELECT s.*, sec.name AS section_name, g.name AS grade_name, st.name AS stage_name
+      FROM students s
+      LEFT JOIN sections sec ON sec.id = s.section_id
+      LEFT JOIN grades g ON g.id = sec.grade_id
+      LEFT JOIN stages st ON st.id = g.stage_id
+      WHERE s.id = ? AND s.deleted_at IS NULL
+      LIMIT 1
+    ''', [studentId]);
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// بحث فوري بالرقم المدرسي (للبحث عند الحضور أو عرض سريع).
+  Future<Student?> byNumberExact(String schoolId, String number) => byNumber(schoolId, number);
+
   /// أرشفة (حذف منطقي) — لا حذف فعلي للسجلات التاريخية.
   Future<void> archive(String studentId) async {
     final db = await AppDatabase.instance.database;
