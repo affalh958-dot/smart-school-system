@@ -115,15 +115,25 @@ jobs:
           # هذا الاختبار هو الدليل الحقيقي على أن البرنامج يفتح على ويندوز.
           # يشغّل الملف التنفيذي فعلياً وينتظر، ويطبع أي سجل خطأ إن فشل.
           $exe = (Resolve-Path "build/windows/x64/runner/Release/school_app.exe").Path
+          Set-Location (Split-Path $exe)
           Write-Host "Launching $exe"
           $p = Start-Process $exe -PassThru
           Start-Sleep -Seconds 25
           $p.Refresh()
           if ($p.HasExited) {
-            Write-Host "!!! البرنامج خرج مبكراً — رمز الخروج: $($p.ExitCode)"
-            Get-ChildItem "$env:APPDATA" -Recurse -Include "school*.log","*.log" -ErrorAction SilentlyContinue |
+            $code = $p.ExitCode
+            Write-Host "!!! البرنامج خرج مبكراً — رمز الخروج: $code (0x$('{0:X8}' -f $code))"
+            foreach ($f in @("school_startup_error.log")) {
+              if (Test-Path $f) { Write-Host "=== $f ==="; Get-Content $f }
+            }
+            Get-ChildItem "$env:APPDATA" -Recurse -Include "school*.log" -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host "=== $($_.FullName) ==="; Get-Content $_.FullName -ErrorAction SilentlyContinue }
-            throw "App exited early on Windows (الكود $($p.ExitCode))"
+            # نطبع خطأ التطبيق من سجل أحداث ويندوز لمعرفة الوحدة المنهارة بالاسم.
+            Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddMinutes(-4)} -ErrorAction SilentlyContinue |
+              Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting' } |
+              Select-Object -First 3 |
+              ForEach-Object { Write-Host "=== EVENT $($_.ProviderName) ==="; Write-Host $_.Message }
+            throw "App exited early on Windows (الكود $code / 0x$('{0:X8}' -f $code))"
           }
           Write-Host "OK: البرنامج ما زال يعمل بعد 25 ثانية — بدء التشغيل ناجح."
           $db = Get-ChildItem "$env:APPDATA" -Recurse -Filter "school.db" -ErrorAction SilentlyContinue | Select-Object -First 1
