@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import 'database.dart';
 import 'models.dart';
+import 'sync_queue_repository.dart';
 
 /// نتيجة محاولة تسجيل الحضور.
 enum RecordOutcome { recorded, duplicate, outsideWindow, notFound }
@@ -71,6 +72,27 @@ class AttendanceRepository {
         'created_at': now.toIso8601String(),
         'updated_at': now.toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.abort);
+
+      // إدراج في طابور المزامنة بمعرّف فريد (client_uuid) لمنع التسجيل المكرر
+      // عند انقطاع الشبكة وإعادة الإرسال. عند ربط الخادم لاحقاً يُرسل هذا العنصر.
+      await SyncQueueRepository().enqueue(
+        entityType: 'attendance_record',
+        entityId: id,
+        operation: 'insert',
+        schoolId: schoolId,
+        clientUuid: cuuid,
+        payload: {
+          'id': id,
+          'student_id': studentId,
+          'session_date': date,
+          'session_type': sessionType,
+          'status': status,
+          'recorded_at': now.toIso8601String(),
+          'source': source,
+          'device_id': deviceId,
+          'confidence': confidence,
+        },
+      );
       return RecordResult(RecordOutcome.recorded, 'تم التسجيل', recordId: id);
     } on DatabaseException catch (e) {
       if (e.toString().contains('UNIQUE')) {

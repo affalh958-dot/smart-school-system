@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_active     INTEGER NOT NULL DEFAULT 1,
   teacher_id    TEXT REFERENCES teachers(id),
   student_id    TEXT,
+  linked_student_id TEXT,
   last_login_at TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
@@ -476,6 +477,7 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   entity_id   TEXT NOT NULL,
   operation   TEXT NOT NULL,
   payload     TEXT NOT NULL,
+  school_id   TEXT REFERENCES schools(id),
   status      TEXT NOT NULL DEFAULT 'pending',
   retry_count INTEGER NOT NULL DEFAULT 0,
   last_error  TEXT,
@@ -483,6 +485,7 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sync_status ON sync_queue(status);
+CREATE INDEX IF NOT EXISTS idx_sync_school ON sync_queue(school_id, status);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id          TEXT PRIMARY KEY,

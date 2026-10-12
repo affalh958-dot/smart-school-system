@@ -26,11 +26,14 @@ flutter build apk --debug       # ينتج build/app/outputs/flutter-apk/app-deb
 - **لا يمكن بناء exe ويندوز على لينكس** (Flutter يتطلب MSVC + Windows). الحل المعتمد: GitHub Actions على `windows-latest`.
 - المستودع الخاص: `affalh958-dot/smart-school-system`. الـworkflow: `.github/workflows/build-windows-desktop.yml`.
 - بناء محلي على أي جهاز ويندوز: `scripts/build_windows.bat` (Flutter + VS2022 C++ workload) → `app/build/windows/x64/runner/Release/school_app.exe`.
-- آخر نسخة منشورة (release): وسم `v1.0.1-win`:
+- آخر نسخة منشورة (release): وسم `v1.0.2-win` (يُنشأ تلقائياً من الـCI عبر `softprops/action-gh-release`):
   - **المثبّت (الأفضل):** `SmartSchool-Setup.exe` → تشغيل ثم نعم، وينشئ اختصاراً على سطح المكتب.
   - **المحمولة:** `SmartSchool-Windows-portable.zip` (فك الضغط → تشغيل `school_app.exe` مباشرةً مع بقاء مجلد `data` وملفات `dll` بجانبه؛ بلا تثبيت).
   - سبب تعذّر فتح البرنامج سابقاً بالنقر: غياب مكتبات Microsoft Visual C++؛ صارت الآن **مُحزَّمة داخل المجلد** (vcruntime140/msvcp140...) فيعمل على أي جهاز.
-  - تحقّق من سلامة الملفات (SHA-256): `SmartSchool-Setup.exe` = `a7457c5f...c48eeb8`، `SmartSchool-Windows-portable.zip` = `8e28e76b...4892c1f`.
+  - تحقّق من سلامة الملفات (SHA-256): مرفقة في `SHA256SUMS.txt` داخل الإصدار.
+  - **تحذير SmartScreen:** طبيعي لملف غير موقّع؛ «مزيد من المعلومات» → «التشغيل على أي حال». الإزالة الكاملة تتطلب شهادة توقيع كود مدفوعة.
+  - **تشخيص عدم الفتح:** التطبيق يكتب أخطاء بدء التشغيل في `%APPDATA%\school_app\school_crash.log`.
+  - الحزم/الـArtifacts تتطلب تسجيل دخول GitHub؛ لذا النشر إلى Release ضروري للتحميل المباشر.
 - شاشة تسجيل الوجه والكاميرا معطّلة على سطح المكتب برسالة واضحة (التعرّف يتم على الأندرويد عند المدخل).
 
 ## المعمارية
@@ -38,10 +41,15 @@ flutter build apk --debug       # ينتج build/app/outputs/flutter-apk/app-deb
 - `lib/data/` — النماذج (`models`) والمستودعات (students, attendance, biometric, academic, grades, reports, audit, student_columns) + `database.dart` (SQLite + ترحيلات) + `export/xlsx_writer.dart`.
 - `lib/face/` — `face_engine` (TFLite) و`face_index` (مطابقة في الذاكرة).
 - `lib/ui/screens/` — الشاشات حسب الدور.
-- `assets/db/schema.sql` — المخطط الكامل (يُنسخ إلى `db/sqlite/schema.sql`، يجب إبقاؤهما متطابقين).
+- `assets/db/schema.sql` — المخطط الكامل (يُحمَّل عبر `rootBundle`؛ لا توجد نسخة ثانية يجب مزامنتها).
 
 ## إضافات حديثة
 - **بوابة الطالب** (`student_home_screen.dart`): تقرأ فقط ملف الطالب المرتبط بـ`users.student_id` وتقييماته التراكمية؛ لا تعديل ولا رؤية لبيانات طالب آخر.
+- **بوابة ولي الأمر** (`guardian_home_screen.dart`): قراءة فقط للطالب المرتبط عبر `users.linked_student_id`؛ تعرض الحضور والتأخير والغياب والدرجات والتقييمات، بلا تعديل ولا وصول لطالب آخر.
+- **إعدادات الدوام** (`school_settings_repository.dart` + `settings_screen.dart`): أوقات الدوام ونوافذ الحضور، أيام الدوام الأسبوعية، الاستراحات، العطل/الاستثناءات، وقواعد الانصراف — كلها JSON قابلة للضبط بلا تعديل الكود.
+- **طابور المزامنة** (`sync_queue_repository.dart` + `sync_screen.dart`): حفظ سجلات الحضور محلياً بمعرّف فريد (`client_uuid`) عند انقطاع الاتصال، إعادة الإرسال مع إعادة المحاولة (حتى 5 محاولات ثم «فاشل» للمراجعة)، دون تكرار. التسجيل يُدرج تلقائياً في الطابور من `attendance_repository`.
+- **جلسة الانصراف** (`attendance_screen.dart`): زر تبديل وضع الحضور/الانصراف، تمييز الانصراف المبكر، ومنع التسجيل التلقائي في أيام العطل/الراحة الأسبوعية.
+- **تسجيل الأعطال** (`main.dart`): كل خطأ بدء تشغيل يُكتب في `school_crash.log` (تشخيص عدم فتح تطبيق ويندوز).
 - **التقييم الأسبوعي التراكمي** (`evaluation_repository.dart` + `evaluations_screen.dart` + `weekly_evaluations`): upsert على (طالب+مادة+أسبوع)، تحقق من النطاق، ومعدّل مرجّح.
 - **ترحيل نهاية السنة** (`promotion_screen.dart`): الناجح لشعبة جديدة والراسب يبقى، مع توثيق كل حركة في `student_movements`.
 - **واتساب** (`whatsapp_helper.dart`): تطبيع أرقام عراقية للصيغة الدولية + رسالة تقييم جاهزة (deep link، بلا خدمات مدفوعة).

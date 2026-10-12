@@ -3,7 +3,7 @@
 
 #define AppName "نظام إدارة المدرسة الذكي"
 #define AppNameEn "Smart School System"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.2"
 #define AppExe "school_app.exe"
 
 [Setup]

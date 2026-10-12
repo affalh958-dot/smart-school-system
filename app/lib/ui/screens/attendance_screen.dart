@@ -17,6 +17,8 @@ import '../../data/database.dart';
 import '../../data/device_repository.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
+import '../../data/school_settings_repository.dart';
+import '../../data/sync_queue_repository.dart';
 import 'camera_utils.dart';
 import 'student_profile_screen.dart';
 
@@ -50,11 +52,24 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   bool _running = false;
   String? _initError;
   int _successCount = 0;
-  final int _reviewCount = 0;
+  int _pendingSync = 0;
+  int _failedSync = 0;
+
+  /// نوع الجلسة: حضور صباحي أو انصراف. يُمنع خلط الانصراف مع الحضور الصباحي.
+  String _sessionType = 'morning';
+
+  /// هل اليوم عطلة/راحة؟ يُمنع التسجيل التلقائي عندها.
+  bool _isWorkingDay = true;
+  String? _holidayTitle;
+
+  final SchoolSettingsRepository _settings = SchoolSettingsRepository();
 
   /// وقت اعتبار التأخير من إعدادات المدرسة (افتراضي 07:30).
   int _lateHour = 7;
   int _lateMinute = 30;
+
+  /// شروط الانصراف: أدنى وقت للانصراف قبل نهاية الدوام + حد الانصراف المبكر.
+  int _earlyLeaveMinutes = 12 * 60; // 12:00 افتراضي
 
   /// مهلة لكل طالب لمنع الاحتساب المتكرر أثناء بقائه أمام الكاميرا.
   final Map<String, DateTime> _cooldown = {};
@@ -99,7 +114,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       await controller.startImageStream(_onFrame);
       if (!mounted) return;
       final state = context.read<AppState>();
-      await _loadLateSetting(state.schoolId);
+      await _loadSettings(state.schoolId);
+      await _refreshSyncCounters(state.schoolId);
       await DeviceRepository().ensureRegistered(deviceId: state.ensureDeviceId(), schoolId: state.schoolId ?? '');
       await state.rebuildFaceIndex();
       if (!mounted) return;
@@ -127,6 +143,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Future<void> _processFrame(CameraImage image) async {
     final state = context.read<AppState>();
     if (!state.faceIndex.isBuilt) return;
+
+    // منع التسجيل التلقائي في يوم عطلة أو يوم راحة أسبوعية.
+    if (!_isWorkingDay) return;
 
     final inputImage = _toInputImage(image);
     if (inputImage == null) return;
@@ -172,8 +191,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       final result = await _attendance.record(
         studentId: studentId,
-        sessionType: 'morning',
-        status: _statusFor(now),
+        sessionType: _sessionType,
+        status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
         source: 'face',
         deviceId: state.deviceId,
         confidence: match.score,
@@ -182,6 +201,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       if (result.outcome == RecordOutcome.recorded) {
         _successCount++;
+        await _refreshSyncCounters(state.schoolId);
         if (mounted) {
           final profile = await _students.fullProfile(studentId);
           if (!mounted) return;
@@ -194,7 +214,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               guardianPhone: profile?['guardian_phone'] as String?,
               residence: profile?['residence'] as String?,
               notes: profile?['notes'] as String?,
-              status: _statusFor(now),
+              status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
               time: now,
               confidence: match.score,
             );
@@ -217,24 +237,65 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
   }
 
-  /// يقرأ وقت اعتبار التأخير من إعدادات دوام المدرسة.
-  Future<void> _loadLateSetting(String? schoolId) async {
+  /// يقرأ إعدادات الدوام (التأخير، الانصراف، العطل) من قاعدة البيانات.
+  Future<void> _loadSettings(String? schoolId) async {
     if (schoolId == null) return;
     final db = await AppDatabase.instance.database;
     final rows = await db.query('attendance_settings',
         where: 'school_id = ? AND scope = ?', whereArgs: [schoolId, 'school'], limit: 1);
-    if (rows.isEmpty) return;
-    final late = rows.first['late_after'] as String?;
-    if (late == null) return;
-    final parts = late.split(':');
-    if (parts.length < 2) return;
-    _lateHour = int.tryParse(parts[0]) ?? _lateHour;
-    _lateMinute = int.tryParse(parts[1]) ?? _lateMinute;
+    if (rows.isNotEmpty) {
+      final late = rows.first['late_after'] as String?;
+      if (late != null) {
+        final parts = late.split(':');
+        if (parts.length >= 2) {
+          _lateHour = int.tryParse(parts[0]) ?? _lateHour;
+          _lateMinute = int.tryParse(parts[1]) ?? _lateMinute;
+        }
+      }
+    }
+    final rules = await _settings.checkoutRules(schoolId);
+    final early = rules['early_leave_before'] as String?;
+    if (early != null) {
+      final p = early.split(':');
+      if (p.length >= 2) {
+        _earlyLeaveMinutes = (int.tryParse(p[0]) ?? 12) * 60 + (int.tryParse(p[1]) ?? 0);
+      }
+    }
+    // فحص يوم الدوام/العطلة لليوم الحالي.
+    final today = SchoolSettingsRepository.dateOnly(DateTime.now());
+    try {
+      final working = await _settings.isWorkingDay(schoolId, today);
+      final holiday = await _settings.holidayFor(schoolId, today);
+      if (mounted) {
+        setState(() {
+          _isWorkingDay = working;
+          _holidayTitle = holiday?.title;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _refreshSyncCounters(String? schoolId) async {
+    final repo = SyncQueueRepository();
+    final pending = await repo.pendingCount(schoolId: schoolId);
+    final failed = (await repo.failed(schoolId: schoolId)).length;
+    if (mounted) {
+      setState(() {
+        _pendingSync = pending;
+        _failedSync = failed;
+      });
+    }
   }
 
   String _statusFor(DateTime now) {
     final minutes = now.hour * 60 + now.minute;
     return minutes > (_lateHour * 60 + _lateMinute) ? 'late' : 'present';
+  }
+
+  /// حالة سجل الانصراف: انصراف مبكر إن كان قبل الحد، وإلا حاضر/منصرف.
+  String _checkoutStatus(DateTime now) {
+    final minutes = now.hour * 60 + now.minute;
+    return minutes < _earlyLeaveMinutes ? 'early_leave' : 'present';
   }
 
   Future<Student?> _studentById(String id) async {
@@ -286,15 +347,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final isCheckout = _sessionType == 'checkout';
     return Scaffold(
       appBar: AppBar(
-        title: const Text('شاشة الحضور'),
+        title: Text(isCheckout ? 'شاشة الانصراف' : 'شاشة الحضور'),
         actions: [
           if (context.read<AppState>().can(Perms.attendanceWrite))
             IconButton(
               tooltip: 'تسجيل يدوي',
               icon: const Icon(Icons.edit_note),
               onPressed: _manualEntry,
+            ),
+          if (context.read<AppState>().can(Perms.attendanceWrite))
+            IconButton(
+              tooltip: isCheckout ? 'التبديل إلى الحضور الصباحي' : 'التبديل إلى الانصراف',
+              icon: Icon(isCheckout ? Icons.login : Icons.logout),
+              onPressed: _toggleSession,
             ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -306,6 +374,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       ),
       body: Column(
         children: [
+          if (!_isWorkingDay) _holidayBanner(),
           Expanded(
             flex: 3,
             child: _cameraView(),
@@ -323,6 +392,36 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   Expanded(child: _resultView()),
                 ],
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleSession() {
+    setState(() {
+      _sessionType = _sessionType == 'morning' ? 'checkout' : 'morning';
+      _successCount = 0;
+      _last = null;
+      _cooldown.clear();
+    });
+    _snack(_sessionType == 'morning' ? 'وضع الحضور الصباحي' : 'وضع الانصراف');
+  }
+
+  Widget _holidayBanner() {
+    return Container(
+      width: double.infinity,
+      color: AppTheme.warning.withValues(alpha: 0.15),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      child: Row(
+        children: [
+          const Icon(Icons.event_busy, color: AppTheme.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _holidayTitle != null ? 'عطلة: $_holidayTitle — التسجيل التلقائي متوقف' : 'اليوم ليس يوم دوام — التسجيل التلقائي متوقف',
+              style: const TextStyle(color: AppTheme.warning, fontWeight: FontWeight.bold),
             ),
           ),
         ],
@@ -374,13 +473,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Widget _statusBar(AppState state) {
+    final syncColor = _pendingSync == 0 ? AppTheme.success : AppTheme.warning;
     return Row(
       children: [
-        Expanded(child: _chip('مسجّل اليوم', '$_successCount', AppTheme.success)),
+        Expanded(child: _chip('مسجّل الجلسة', '$_successCount', AppTheme.success)),
         const SizedBox(width: 8),
-        Expanded(child: _chip('تحتاج مراجعة', '$_reviewCount', AppTheme.warning)),
+        Expanded(child: _chip('غير متزامن', '$_pendingSync', syncColor)),
         const SizedBox(width: 8),
-        Expanded(child: _chip('غير متزامن', '0', AppTheme.textMuted)),
+        Expanded(child: _chip('فشل مزامنة', '$_failedSync', _failedSync == 0 ? AppTheme.textMuted : AppTheme.danger)),
       ],
     );
   }
@@ -411,8 +511,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
     final r = _last!;
     final isDup = r.status == 'duplicate';
-    final color = isDup ? AppTheme.warning : (r.status == 'late' ? AppTheme.warning : AppTheme.success);
-    final label = isDup ? 'مسجَّل مسبقاً' : (r.status == 'late' ? 'حضور متأخر' : 'تم تسجيل الحضور');
+    final isEarly = r.status == 'early_leave';
+    final color = isDup ? AppTheme.warning : (r.status == 'late' || isEarly ? AppTheme.warning : AppTheme.success);
+    final label = isDup
+        ? 'مسجَّل مسبقاً'
+        : _sessionType == 'checkout'
+            ? (isEarly ? 'انصراف مبكر' : 'تم تسجيل الانصراف')
+            : (r.status == 'late' ? 'حضور متأخر' : 'تم تسجيل الحضور');
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -499,8 +604,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final now = DateTime.now();
     final result = await _attendance.record(
       studentId: student.id,
-      sessionType: 'morning',
-      status: _statusFor(now),
+      sessionType: _sessionType,
+      status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
       source: 'manual',
       deviceId: state.deviceId,
       schoolId: state.schoolId,
@@ -508,12 +613,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     if (!mounted) return;
     if (result.outcome == RecordOutcome.recorded) {
       _successCount++;
+      await _refreshSyncCounters(state.schoolId);
       setState(() {
         _last = _LastResult(
           studentId: student.id,
           name: student.fullName,
           number: student.studentNumber,
-          status: _statusFor(now),
+          status: _sessionType == 'morning' ? _statusFor(now) : _checkoutStatus(now),
           time: now,
           confidence: 1.0,
         );

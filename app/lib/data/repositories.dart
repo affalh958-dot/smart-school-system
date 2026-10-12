@@ -258,6 +258,7 @@ class AuthRepository {
       'phone': u['phone'],
       'school_id': u['school_id'],
       'student_id': u['student_id'],
+      'linked_student_id': u['linked_student_id'],
       'roles': roleCodes,
     };
   }

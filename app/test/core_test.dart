@@ -16,7 +16,9 @@ import 'package:school_app/data/models.dart';
 import 'package:school_app/data/repositories.dart';
 import 'package:school_app/data/reports_repository.dart';
 import 'package:school_app/data/school_repository.dart';
+import 'package:school_app/data/school_settings_repository.dart';
 import 'package:school_app/data/student_columns_repository.dart';
+import 'package:school_app/data/sync_queue_repository.dart';
 import 'package:school_app/face/face_index.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -791,6 +793,110 @@ void main() {
       final t = CsvImportService.template();
       expect(t.contains('الرقم المدرسي'), isTrue);
       expect(t.contains('الاسم'), isTrue);
+    });
+  });
+
+  group('طابور المزامنة (العمل دون اتصال)', () {
+    test('تسجيل الحضور يُدرج تلقائياً في طابور المزامنة', () async {
+      final id = await StudentRepository().create(Student(
+        id: '', schoolId: schoolId, studentNumber: '9901-queue', fullName: 'طالب الطابور'));
+      final att = AttendanceRepository();
+      final before = await SyncQueueRepository().pendingCount(schoolId: schoolId);
+      final r = await att.record(studentId: id, sessionType: 'morning', status: 'present', schoolId: schoolId);
+      expect(r.outcome, RecordOutcome.recorded);
+      final after = await SyncQueueRepository().pendingCount(schoolId: schoolId);
+      expect(after, before + 1);
+    });
+
+    test('client_uuid المكرر لا يُضاف مرتين إلى الطابور', () async {
+      final repo = SyncQueueRepository();
+      final before = await repo.pendingCount(schoolId: schoolId);
+      await repo.enqueue(
+          entityType: 'attendance_record',
+          entityId: 'e1',
+          operation: 'insert',
+          payload: {'x': 1},
+          schoolId: schoolId,
+          clientUuid: 'cuuid-dup-1');
+      await repo.enqueue(
+          entityType: 'attendance_record',
+          entityId: 'e1',
+          operation: 'insert',
+          payload: {'x': 1},
+          schoolId: schoolId,
+          clientUuid: 'cuuid-dup-1');
+      expect(await repo.pendingCount(schoolId: schoolId), before + 1);
+    });
+
+    test('المزامنة تُفرِّغ الطابور وتُرجع النتيجة', () async {
+      final repo = SyncQueueRepository();
+      final result = await repo.sync(schoolId: schoolId);
+      expect(result.remaining, 0);
+      expect(result.synced >= 1, isTrue);
+      expect(await repo.pendingCount(schoolId: schoolId), 0);
+    });
+
+    test('الفشل المتكرر يضع العنصر في قائمة الفاشلة دون حذفه', () async {
+      final repo = SyncQueueRepository();
+      await repo.enqueue(
+          entityType: 'attendance_record',
+          entityId: 'e2',
+          operation: 'insert',
+          payload: {'x': 2},
+          schoolId: schoolId,
+          clientUuid: 'cuuid-fail-1');
+      for (var i = 0; i < 5; i++) {
+        await repo.sync(schoolId: schoolId, pusher: (_) async => false);
+      }
+      final failed = await repo.failed(schoolId: schoolId);
+      expect(failed.any((f) => f.clientUuid == 'cuuid-fail-1'), isTrue);
+    });
+  });
+
+  group('إعدادات الدوام والعطل والاستراحات', () {
+    test('أيام الدوام الافتراضية الأحد→الخميس', () async {
+      final repo = SchoolSettingsRepository();
+      final days = await repo.workingDays(schoolId);
+      expect(days.containsAll({7, 1, 2, 3, 4}), isTrue);
+      expect(days.contains(5), isFalse);
+      expect(days.contains(6), isFalse);
+    });
+
+    test('حفظ واستعادة أيام الدوام', () async {
+      final repo = SchoolSettingsRepository();
+      await repo.saveWorkingDays(schoolId, {1, 2, 3});
+      final days = await repo.workingDays(schoolId);
+      expect(days, {1, 2, 3});
+      await repo.saveWorkingDays(schoolId, {7, 1, 2, 3, 4});
+    });
+
+    test('العطلة تُمنع التسجيل في يومها وليس يوم دوام', () async {
+      final repo = SchoolSettingsRepository();
+      final today = _today();
+      await repo.addHoliday(schoolId, Holiday(id: '', dateFrom: today, dateTo: today, type: 'official', title: 'عطلة اختبار'));
+      expect(await repo.isWorkingDay(schoolId, today), isFalse);
+      final h = await repo.holidayFor(schoolId, today);
+      expect(h, isNotNull);
+      expect(h!.title, 'عطلة اختبار');
+      // تنظيف
+      await repo.removeHoliday(h.id);
+    });
+
+    test('حفظ واستعادة الاستراحات', () async {
+      final repo = SchoolSettingsRepository();
+      await repo.saveBreaks(schoolId, [BreakSlot(label: 'استراحة الفسحة', start: '09:30', end: '09:50')]);
+      final breaks = await repo.breaks(schoolId);
+      expect(breaks.length, 1);
+      expect(breaks.first.label, 'استراحة الفسحة');
+      await repo.saveBreaks(schoolId, []);
+    });
+
+    test('قواعد الانصراف قابلة للضبط', () async {
+      final repo = SchoolSettingsRepository();
+      await repo.saveCheckoutRules(schoolId, {'min_before_end': 10, 'early_leave_before': '11:30'});
+      final rules = await repo.checkoutRules(schoolId);
+      expect(rules['early_leave_before'], '11:30');
+      expect(rules['min_before_end'], 10);
     });
   });
 }

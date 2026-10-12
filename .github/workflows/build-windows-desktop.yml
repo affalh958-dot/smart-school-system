@@ -10,6 +10,9 @@ on:
       - 'app/**'
       - '.github/workflows/build-windows-desktop.yml'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -96,6 +99,14 @@ jobs:
           path: app/build/windows/x64/runner/Release/
           if-no-files-found: error
 
+      - name: Build portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" `
+            -DestinationPath "dist/SmartSchool-Windows-portable.zip" -Force
+          Get-Item "dist/SmartSchool-Windows-portable.zip" | Format-List Name,Length
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
@@ -113,3 +124,33 @@ jobs:
           name: SmartSchool-Setup
           path: app/dist/SmartSchool-Setup.exe
           if-no-files-found: error
+
+      - name: Compute checksums
+        shell: pwsh
+        run: |
+          Get-FileHash "dist/SmartSchool-Setup.exe" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  SmartSchool-Setup.exe" } | Tee-Object -FilePath "dist/SHA256SUMS.txt"
+
+      - name: Publish GitHub Release
+        # إصدار دائم قابل للتحميل المباشر دون تسجيل دخول (يحل مشكلة «الملف لا يفتح/الأرتيفاكت»).
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.2-win
+          name: "نظام إدارة المدرسة الذكي — ويندوز v1.0.2"
+          body: |
+            نسخة ويندوز الحقيقية (تطبيق مكتبي Flutter).
+
+            **التثبيت:** حمّل `SmartSchool-Setup.exe` وشغّله.
+            **بدون تثبيت:** حمّل `SmartSchool-Windows-portable.zip` وفكّ الضغط ثم شغّل `school_app.exe`.
+
+            ملاحظات:
+            - مكتبات Visual C++ مُضمّنة بجانب البرنامج (لا حاجة لتثبيت مسبق).
+            - إن ظهر تحذير SmartScreen: اضغط «مزيد من المعلومات» ثم «التشغيل على أي حال» (الملف غير موقّع رقمياً؛ التوقيع يتطلب شهادة مدفوعة).
+            - يتم تسجيل أي خطأ بدء تشغيل في `%APPDATA%\school_app\school_crash.log`.
+          files: |
+            app/dist/SmartSchool-Setup.exe
+            app/dist/SmartSchool-Windows-portable.zip
+            app/dist/SHA256SUMS.txt
+          draft: false
+          prerelease: false

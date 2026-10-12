@@ -8,6 +8,7 @@ import '../../data/database.dart';
 import '../../data/repositories.dart';
 import 'dashboard_screen.dart';
 import 'platform_dashboard_screen.dart';
+import 'guardian_home_screen.dart';
 import 'student_home_screen.dart';
 
 /// شاشة الدخول. عند أول تشغيل تُنشئ حساب المالك الثابت والمدرسة الأولى.
@@ -57,10 +58,13 @@ class _LoginScreenState extends State<LoginScreen> {
         if (!mounted) return;
         final owner = state.isPlatformOwner;
         final student = state.isStudent;
+        final guardian = state.isGuardian;
         Navigator.of(context).pushReplacement(MaterialPageRoute(
             builder: (_) => owner
                 ? const PlatformDashboardScreen()
-                : (student ? const StudentHomeScreen() : const DashboardScreen())));
+                : (student
+                    ? const StudentHomeScreen()
+                    : (guardian ? const GuardianHomeScreen() : const DashboardScreen()))));
       }
     } catch (e) {
       setState(() => _error = 'حدث خطأ: $e');

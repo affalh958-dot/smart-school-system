@@ -1,5 +1,10 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import 'core/app_state.dart';
@@ -11,7 +16,33 @@ import 'ui/screens/login_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // تسجيل الأخطاء في ملف سجل حتى نتمكّن من تشخيص أي فشل بدء تشغيل على ويندوز
+  // (كان التطبيق يفشل في الصمت دون أي رسالة).
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    _logCrash('FlutterError', details.exception, details.stack);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    _logCrash('UncaughtAsync', error, stack);
+    return true;
+  };
+
   runApp(const SchoolApp());
+}
+
+/// يكتب خطأ بدء التشغيل إلى school_crash.log في مجلد دعم التطبيق.
+Future<void> _logCrash(String kind, Object error, StackTrace? stack) async {
+  try {
+    final dir = await getApplicationSupportDirectory();
+    final f = File(p.join(dir.path, 'school_crash.log'));
+    await f.writeAsString(
+      '[${DateTime.now().toIso8601String()}] $kind: $error\n${stack ?? ''}\n\n',
+      mode: FileMode.append,
+    );
+  } catch (_) {
+    // لا يمكن التسجيل — لا شيء نفعله.
+  }
 }
 
 class SchoolApp extends StatelessWidget {

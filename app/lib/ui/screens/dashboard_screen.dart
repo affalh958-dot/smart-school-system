@@ -22,6 +22,7 @@ import 'reports_screen.dart';
 import 'settings_screen.dart';
 import 'student_columns_screen.dart';
 import 'students_screen.dart';
+import 'sync_screen.dart';
 import 'users_screen.dart';
 
 /// لوحة التحكم الرئيسية — شبكة مربّعات أنيقة حسب دور المستخدم وصلاحياته.
@@ -298,9 +299,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           () => _push(const AuditScreen()));
     }
     if (state.can(Perms.settingsManage)) {
-      add('الإعدادات', 'أوقات الدوام ونوافذ الحضور', Icons.settings, AppTheme.textMuted,
+      add('الإعدادات', 'أوقات الدوام وأيام الدوام والعطل', Icons.settings, AppTheme.textMuted,
           () => _push(const SettingsScreen()));
     }
+    add('المزامنة', 'السجلات غير المرسلة وحالة الاتصال', Icons.cloud_sync, AppTheme.accent,
+        () => _push(const SyncScreen()));
     if (state.can(Perms.backupManage)) {
       add('النسخ الاحتياطي', 'إنشاء نسخة واستعادة البيانات', Icons.backup, AppTheme.success,
           () => _push(const BackupScreen()));

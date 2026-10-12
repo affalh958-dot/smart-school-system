@@ -58,7 +58,7 @@ class AppDatabase {
   Future<Database> _create(String dbPath, String schema) async {
     return openDatabase(
       dbPath,
-      version: 4,
+      version: 5,
       onConfigure: (d) async {
         await d.execute('PRAGMA foreign_keys = ON');
       },
@@ -149,6 +149,14 @@ class AppDatabase {
           ''');
           await d.execute('CREATE INDEX IF NOT EXISTS idx_eval_student ON weekly_evaluations(student_id, academic_year_id)');
           await d.execute('CREATE INDEX IF NOT EXISTS idx_eval_school  ON weekly_evaluations(school_id, week_no)');
+        }
+        // ترحيل 4 → 5: ربط طابور المزامنة بالمدرسة (لعزل بيانات كل مدرسة).
+        if (oldVersion < 5) {
+          await _addColumnIfMissing(d, 'sync_queue', 'school_id TEXT');
+          try {
+            await d.execute('CREATE INDEX IF NOT EXISTS idx_sync_school ON sync_queue(school_id, status)');
+          } catch (_) {}
+          await _addColumnIfMissing(d, 'users', 'linked_student_id TEXT');
         }
       },
       onOpen: (d) async {
