@@ -1,6 +1,6 @@
 name: build-windows-desktop
 
-# بناء برنامج حاسوب حقيقي لويندوز (exe).
+# بناء برنامج حاسوب حقيقي لويندوز: ملف تنفيذي (exe) + مثبّت Setup.exe.
 # يجب أن يعمل على مشغّل windows لأن Flutter لا يمكنه البناء المتقاطع لويندوز من لينكس.
 on:
   workflow_dispatch:
@@ -37,6 +37,41 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
+      - name: Bundle Visual C++ runtime (app-local, no install needed)
+        shell: pwsh
+        run: |
+          # ننسخ مكتبات VC++ بجانب البرنامج حتى يعمل على أي جهاز بلا تثبيت مسبق.
+          # نجرّب كل إصدارات VC++ المتوفرة على المشغّل ونأخذ أول نسخة x64.
+          $dest = "build/windows/x64/runner/Release"
+          $found = $false
+          $roots = @(
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC",
+            "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC"
+          )
+          foreach ($r in $roots) {
+            if (-not (Test-Path $r)) { continue }
+            $cand = Get-ChildItem -Path $r -Recurse -Filter "vcruntime140.dll" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -match "x64" } | Select-Object -First 1
+            if ($cand) {
+              $dir = $cand.Directory.FullName
+              Copy-Item "$dir\*.dll" $dest -Force -ErrorAction SilentlyContinue
+              Write-Host "Bundled VC++ runtime from $dir"
+              $found = $true
+              break
+            }
+          }
+          if (-not $found) { Write-Warning "VC++ redistributable not found on runner" }
+          Get-ChildItem $dest -Filter "*.dll" | Select-Object Name | Format-Table
+
+      - name: Verify exe exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build/windows/x64/runner/Release/school_app.exe")) {
+            throw "school_app.exe not found!"
+          }
+
       - name: Upload Windows app (Release folder)
         uses: actions/upload-artifact@v4
         with:
@@ -44,4 +79,22 @@ jobs:
           # لتفادي «الضغط المزدوج» الذي يجعل المستخدم يرى ملف zip داخل zip.
           name: SmartSchool-Windows
           path: app/build/windows/x64/runner/Release/
+          if-no-files-found: error
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer (Setup.exe)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          & $iscc "windows\installer.iss"
+          Get-ChildItem "dist" | Format-List Name,Length
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartSchool-Setup
+          path: app/dist/SmartSchool-Setup.exe
           if-no-files-found: error
