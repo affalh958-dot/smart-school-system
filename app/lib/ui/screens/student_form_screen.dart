@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/app_state.dart';
 import '../../core/theme.dart';
 import '../../data/academic_repository.dart';
+import '../../data/audit_repository.dart';
 import '../../data/database.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
@@ -79,6 +80,8 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   }
 
   String? get _schoolId => context.read<AppState>().schoolId;
+
+  String? get _currentUserId => context.read<AppState>().user?['id'] as String?;
 
   Future<void> _load() async {
     final schoolId = _schoolId;
@@ -171,6 +174,14 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
 
       final customValues = {for (final c in _columns) c.id: _custom[c.id]?.text.trim() ?? ''};
       if (customValues.isNotEmpty) await _columnsRepo.setValues(id, customValues);
+
+      await AuditRepository().log(
+        userId: _currentUserId,
+        action: f == null ? 'student.create' : 'student.update',
+        entityType: 'student',
+        entityId: id,
+        newValue: '${student.fullName} (${student.studentNumber})',
+      );
 
       if (!mounted) return;
       _snack(f == null ? 'تمت إضافة الطالب بنجاح' : 'تم حفظ التعديلات', AppTheme.success);

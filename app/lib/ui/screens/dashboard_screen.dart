@@ -5,8 +5,10 @@ import '../../core/app_state.dart';
 import '../../core/permissions.dart';
 import '../../core/theme.dart';
 import '../../data/attendance_repository.dart';
+import '../../data/database.dart';
 import '../../data/repositories.dart';
 import 'attendance_screen.dart';
+import 'audit_screen.dart';
 import 'academic_screen.dart';
 import 'classes_screen.dart';
 import 'face_enroll_screen.dart';
@@ -31,6 +33,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, int> _stats = {};
   int _totalStudents = 0;
   int _pending = 0;
+  String _today = '';
+  List<Map<String, dynamic>> _recentToday = [];
 
   @override
   void initState() {
@@ -55,10 +59,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _stats = stats;
         _pending = pending;
         _totalStudents = total;
+        _today = date;
       });
+      await _loadRecent(date);
     } catch (_) {
       // نتجاهل أخطاء التحميل الأولي ولا نعطّل اللوحة
     }
+  }
+
+  Future<void> _loadRecent(String date) async {
+    final state = context.read<AppState>();
+    try {
+      final db = await AppDatabase.instance.database;
+      final rows = state.schoolId == null
+          ? await db.rawQuery('''
+              SELECT ar.recorded_at, ar.status, s.full_name, s.student_number
+              FROM attendance_records ar JOIN students s ON s.id = ar.student_id
+              WHERE ar.session_date = ? AND ar.deleted_at IS NULL
+              ORDER BY ar.recorded_at DESC LIMIT 8
+            ''', [date])
+          : await db.rawQuery('''
+              SELECT ar.recorded_at, ar.status, s.full_name, s.student_number
+              FROM attendance_records ar JOIN students s ON s.id = ar.student_id
+              WHERE ar.session_date = ? AND ar.deleted_at IS NULL AND s.school_id = ?
+              ORDER BY ar.recorded_at DESC LIMIT 8
+            ''', [date, state.schoolId]);
+      if (!mounted) return;
+      setState(() => _recentToday = rows);
+    } catch (_) {}
   }
 
   @override
@@ -91,6 +119,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 16),
             _statsGrid(),
             const SizedBox(height: 16),
+            ..._recentToday.isEmpty ? const [] : [_recentCard()],
             const Text('الوظائف المتاحة', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             ...items.map((e) => _menuTile(e)),
@@ -130,6 +159,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final late = _stats['late'] ?? 0;
     final absent = _stats['absent'] ?? 0;
     final notRecorded = (_totalStudents - present - late - absent).clamp(0, _totalStudents);
+    final rate = _totalStudents == 0 ? 0 : ((present + late) * 100 / _totalStudents).round();
     final cards = [
       _statCard('إجمالي الطلاب', '$_totalStudents', Icons.groups, AppTheme.accent),
       _statCard('الحاضرون اليوم', '$present', Icons.check_circle, AppTheme.success),
@@ -137,6 +167,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _statCard('الغائبون', '$absent', Icons.cancel, AppTheme.danger),
       _statCard('لم يسجّلوا بعد', '$notRecorded', Icons.hourglass_empty, AppTheme.textMuted),
       _statCard('تحتاج مراجعة', '$_pending', Icons.flag, AppTheme.warning),
+      _statCard('نسبة الحضور', '$rate%', Icons.percent, AppTheme.primary),
+      _statCard('التاريخ', _today, Icons.calendar_today, AppTheme.textMuted),
     ];
     return GridView.count(
       crossAxisCount: 2,
@@ -146,6 +178,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
       crossAxisSpacing: 10,
       childAspectRatio: 2.1,
       children: cards,
+    );
+  }
+
+  Widget _recentCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(children: [
+              Icon(Icons.recent_actors, color: AppTheme.primary, size: 20),
+              SizedBox(width: 8),
+              Text('آخر عمليات التسجيل اليوم', style: TextStyle(fontWeight: FontWeight.bold)),
+            ]),
+            const Divider(),
+            ..._recentToday.map((r) {
+              final status = r['status'] as String;
+              final color = status == 'late'
+                  ? AppTheme.warning
+                  : status == 'absent'
+                      ? AppTheme.danger
+                      : AppTheme.success;
+              final label = status == 'late' ? 'متأخر' : status == 'absent' ? 'غائب' : 'حاضر';
+              return ListTile(
+                dense: true,
+                leading: Icon(Icons.person, color: color, size: 20),
+                title: Text('${r['full_name']} (${r['student_number']})'),
+                trailing: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+              );
+            }),
+          ],
+        ),
+      ),
     );
   }
 
@@ -218,6 +284,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (state.can(Perms.reportRead)) {
       list.add(_MenuItem('التقارير', 'الحضور والغياب والتأخير', Icons.bar_chart, AppTheme.success,
           () => _push(const ReportsScreen())));
+    }
+    if (state.can(Perms.auditRead)) {
+      list.add(_MenuItem('سجل العمليات', 'آخر الإجراءات وتعديلات الحضور', Icons.history, AppTheme.textMuted,
+          () => _push(const AuditScreen())));
     }
     if (state.can(Perms.userManage)) {
       list.add(_MenuItem('المستخدمون', 'إنشاء الحسابات والأدوار', Icons.manage_accounts, AppTheme.warning,

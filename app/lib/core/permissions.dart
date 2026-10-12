@@ -5,14 +5,16 @@ class Roles {
   static const manager = 'manager';
   static const attendance = 'attendance';
   static const teacher = 'teacher';
+  static const student = 'student';
   static const guardian = 'guardian';
 
   static const Map<String, String> labels = {
     owner: 'المالك / مسؤول المنصة',
-    admin: 'مسؤول النظام',
+    admin: 'المعاون / مسؤول النظام',
     manager: 'مدير المدرسة',
     attendance: 'موظف الحضور',
     teacher: 'معلم',
+    student: 'طالب',
     guardian: 'ولي أمر',
   };
 }
@@ -59,6 +61,7 @@ class Perms {
       attendanceScreen, reportRead,
     ],
     Roles.teacher: [studentRead, gradeRead, gradeWrite, attendanceRead],
+    Roles.student: [gradeRead, attendanceRead],
     Roles.guardian: [attendanceRead, gradeRead],
   };
 

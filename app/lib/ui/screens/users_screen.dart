@@ -27,17 +27,31 @@ class _UsersScreenState extends State<UsersScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
+    final state = context.read<AppState>();
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
-      SELECT u.id, u.username, u.full_name, u.is_active,
-             GROUP_CONCAT(r.code) roles
-      FROM users u
-      LEFT JOIN user_roles ur ON ur.user_id = u.id
-      LEFT JOIN roles r ON r.id = ur.role_id
-      WHERE u.deleted_at IS NULL
-      GROUP BY u.id
-      ORDER BY u.full_name
-    ''');
+    final schoolId = state.schoolId;
+    // عزل: يعرض المالك/مسؤول المنصة كل المستخدمين، وغيره المستخدمين ضمن مدرسته فقط.
+    final rows = state.can(Perms.tenantManage) || schoolId == null
+        ? await db.rawQuery('''
+            SELECT u.id, u.username, u.full_name, u.is_active, u.school_id,
+                   GROUP_CONCAT(r.code) roles
+            FROM users u
+            LEFT JOIN user_roles ur ON ur.user_id = u.id
+            LEFT JOIN roles r ON r.id = ur.role_id
+            WHERE u.deleted_at IS NULL
+            GROUP BY u.id
+            ORDER BY u.full_name
+          ''')
+        : await db.rawQuery('''
+            SELECT u.id, u.username, u.full_name, u.is_active, u.school_id,
+                   GROUP_CONCAT(r.code) roles
+            FROM users u
+            LEFT JOIN user_roles ur ON ur.user_id = u.id
+            LEFT JOIN roles r ON r.id = ur.role_id
+            WHERE u.deleted_at IS NULL AND (u.school_id = ? OR u.school_id IS NULL)
+            GROUP BY u.id
+            ORDER BY u.full_name
+          ''', [schoolId]);
     if (!mounted) return;
     setState(() {
       _users = rows;

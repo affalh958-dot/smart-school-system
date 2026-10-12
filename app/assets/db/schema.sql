@@ -489,10 +489,12 @@ CREATE TABLE IF NOT EXISTS backups (
 -- 9) بيانات أولية (Seed)
 -- ---------------------------------------------------------------------------
 INSERT OR IGNORE INTO roles (id, code, name_ar, created_at, updated_at) VALUES
-  ('role-admin',      'admin',      'مسؤول النظام', datetime('now'), datetime('now')),
+  ('role-owner',      'owner',      'المالك / مسؤول المنصة', datetime('now'), datetime('now')),
+  ('role-admin',      'admin',      'المعاون / مسؤول النظام', datetime('now'), datetime('now')),
   ('role-manager',    'manager',    'مدير المدرسة', datetime('now'), datetime('now')),
   ('role-attendance', 'attendance', 'موظف الحضور',  datetime('now'), datetime('now')),
   ('role-teacher',    'teacher',    'معلم',         datetime('now'), datetime('now')),
+  ('role-student',    'student',    'طالب',         datetime('now'), datetime('now')),
   ('role-guardian',   'guardian',   'ولي أمر',      datetime('now'), datetime('now'));
 
 INSERT OR IGNORE INTO permissions (id, code, name_ar, created_at, updated_at) VALUES
@@ -511,7 +513,9 @@ INSERT OR IGNORE INTO permissions (id, code, name_ar, created_at, updated_at) VA
   ('perm-biometric-manage', 'biometric.manage',  'إدارة تسجيل الوجوه',  datetime('now'), datetime('now')),
   ('perm-device-manage',    'device.manage',     'إدارة الأجهزة',       datetime('now'), datetime('now')),
   ('perm-backup-manage',    'backup.manage',     'النسخ الاحتياطي',     datetime('now'), datetime('now')),
-  ('perm-audit-read',       'audit.read',        'عرض سجل العمليات',    datetime('now'), datetime('now'));
+  ('perm-audit-read',       'audit.read',        'عرض سجل العمليات',    datetime('now'), datetime('now')),
+  ('perm-tenant-manage',    'tenant.manage',     'إدارة المدارس (تعدد المدارس)', datetime('now'), datetime('now'));
+
 
 -- ---------------------------------------------------------------------------
 -- سمات الطلاب القابلة للتخصيص (EAV): صفوف/حقول إضافية يحدّدها المدير بنفسه.
