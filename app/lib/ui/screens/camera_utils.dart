@@ -241,18 +241,90 @@ class CameraUtils {
         deviceOrientation: deviceOrientation,
       );
 
-  /// يقتصّ وجه ML Kit من صورة RGB مبنية في اتجاه المستشعر، مع تحويل صحيح
-  /// للإحداثيات حسب الدوران (وإلا كان الاقتصاص خاطئاً وترتفع نسبة الفشل).
+  /// يقتصّ وجه ML Kit من صورة RGB **دون تحويل الإطار كاملاً** (أسرع عشرات
+  /// الأضعاف): يحسب مستطيل الوجه في اتجاه المستشعر ثم يحوّل هذه المنطقة فقط.
   static img.Image? cropFaceRotated(CameraImage image, dynamic face, int rot) {
     try {
-      final full = frameToRgb(image);
-      if (full == null) return null;
       final sensor = Size(image.width.toDouble(), image.height.toDouble());
       final r = FaceGeometry.rotatedBoxToSensor(face.boundingBox as Rect, sensor, rot);
-      return cropBox(full, r.left, r.top, r.width, r.height);
+      final pad = r.width * 0.15;
+      final l = (r.left - pad).clamp(0, sensor.width - 1).toInt();
+      final t = (r.top - pad).clamp(0, sensor.height - 1).toInt();
+      final w = (r.width + pad * 2).clamp(1, sensor.width - l).toInt();
+      final h = (r.height + pad * 2).clamp(1, sensor.height - t).toInt();
+      return _extractRgbRegion(image, l, t, w, h);
     } catch (_) {
       return null;
     }
+  }
+
+  /// يحوّل منطقة مستطيلة فقط من إطار الكاميرا إلى RGB (بدل الإطار الكامل).
+  /// يدعم YUV420 planar (3 planes) و NV21/NV12 المتشابك (2 planes).
+  static img.Image? _extractRgbRegion(CameraImage image, int rx, int ry, int rw, int rh) {
+    final yPlane = image.planes[0];
+    final ySrc = yPlane.bytes;
+    final yRowStride = yPlane.bytesPerRow;
+    final yPixelStride = yPlane.bytesPerPixel ?? 1;
+
+    Uint8List? uSrc, vSrc;
+    var uRow = 0, vRow = 0, uPix = 1, vPix = 1;
+    Uint8List? uvSrc;
+    var uvRow = 0, uvPix = 2;
+    var interleaved = false;
+
+    if (image.planes.length >= 3) {
+      uSrc = image.planes[1].bytes;
+      vSrc = image.planes[2].bytes;
+      uRow = image.planes[1].bytesPerRow;
+      vRow = image.planes[2].bytesPerRow;
+      uPix = image.planes[1].bytesPerPixel ?? 1;
+      vPix = image.planes[2].bytesPerPixel ?? 1;
+    } else if (image.planes.length >= 2) {
+      interleaved = true;
+      uvSrc = image.planes[1].bytes;
+      uvRow = image.planes[1].bytesPerRow;
+      uvPix = image.planes[1].bytesPerPixel ?? 2;
+    }
+
+    final out = img.Image(width: rw, height: rh);
+    for (var yy = 0; yy < rh; yy++) {
+      final sy = ry + yy;
+      final yRowBase = sy * yRowStride;
+      final uvRowIdx = sy >> 1;
+      for (var xx = 0; xx < rw; xx++) {
+        final sx = rx + xx;
+        final yv = ySrc[yRowBase + sx * yPixelStride];
+        int r, g, b;
+        if (interleaved) {
+          final idx = uvRowIdx * uvRow + (sx >> 1) * uvPix;
+          if (idx + 1 < uvSrc!.length) {
+            final vf = uvSrc[idx] - 128; // NV21: V ثم U
+            final uf = uvSrc[idx + 1] - 128;
+            final yf = yv < 16 ? 0 : yv - 16;
+            r = (1.164 * yf + 1.596 * vf).round().clamp(0, 255);
+            g = (1.164 * yf - 0.392 * uf - 0.813 * vf).round().clamp(0, 255);
+            b = (1.164 * yf + 2.017 * uf).round().clamp(0, 255);
+          } else {
+            r = g = b = yv;
+          }
+        } else if (uSrc != null && vSrc != null) {
+          final uIdx = uvRowIdx * uRow + (sx >> 1) * uPix;
+          final vIdx = uvRowIdx * vRow + (sx >> 1) * vPix;
+          final u = uIdx < uSrc.length ? uSrc[uIdx] : 128;
+          final v = vIdx < vSrc.length ? vSrc[vIdx] : 128;
+          final yf = yv < 16 ? 0 : yv - 16;
+          final uf = u - 128;
+          final vf = v - 128;
+          r = (1.164 * yf + 1.596 * vf).round().clamp(0, 255);
+          g = (1.164 * yf - 0.392 * uf - 0.813 * vf).round().clamp(0, 255);
+          b = (1.164 * yf + 2.017 * uf).round().clamp(0, 255);
+        } else {
+          r = g = b = yv;
+        }
+        out.setPixelRgb(xx, yy, r, g, b);
+      }
+    }
+    return out;
   }
 
   /// يحوّل صندوق ML Kit إلى مستطيل نسبي (0..1) داخل الصورة المدوّرة.

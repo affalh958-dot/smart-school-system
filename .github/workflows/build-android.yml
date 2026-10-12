@@ -63,8 +63,8 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.3-android
-          name: "نظام إدارة المدرسة الذكي — أندرويد v1.0.3"
+          tag_name: v1.0.4-android
+          name: "نظام إدارة المدرسة الذكي — أندرويد v1.0.4"
           body: |
             نسخة أندرويد كاملة (APK) جاهزة للتثبيت على الهاتف.
 

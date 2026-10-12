@@ -18,6 +18,11 @@ class AppConfig {
   static const double spoofThreshold = 0.20;   // > القيمة = محاولة انتحال
   static const int cooldownSeconds = 6;        // منع احتساب الوجه نفسه مراراً
 
+  /// تفعيل منع الانتحال فعلياً. الافتراضي **معطّل** لأن مخرجات نموذج الحيوية
+  /// غير معايَرة لبياناتنا؛ تفعيله بعتبة خاطئة يرفض الوجوه الحقيقية فيعطّل
+  /// التعرّف بالكامل. نبقيه استرشادياً حتى معايرته على صور المدرسة الفعلية.
+  static const bool enforceLiveness = false;
+
   static const Uuid uuid = Uuid();
 
   static String newId() => uuid.v4();

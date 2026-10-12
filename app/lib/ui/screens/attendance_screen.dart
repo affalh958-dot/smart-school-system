@@ -54,6 +54,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   int _failedSync = 0;
   int _unrecognizedCount = 0;
 
+  /// مؤشّر السرعة الحقيقي: زمن آخر تعرّفٍ (كشف+مطابقة) وعدد الإطارات/الثانية.
+  int _fpsCount = 0;
+  DateTime _fpsWindow = DateTime.now();
+  double _fps = 0;
+  int _lastLatencyMs = 0;
+
   /// آخر نتائج الكشف لعرض المربّعات فوق الوجه لحظياً (يتحدّث مع كل إطار).
   List<_FaceBox> _boxes = [];
   DateTime? _boxesAt;
@@ -113,6 +119,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final state = context.read<AppState>();
       _detector = FaceDetector(
         options: FaceDetectorOptions(
+          // وضع الوجه الواحد أسرع كثيراً. مجال الدخول عادةً طالب واحد يتقدّم،
+          // ومعالجة كل الوجوه كانت تُبطئ التسجيل وتسبب تجمّد الإطارات.
           enableClassification: true,
           enableTracking: true,
           performanceMode: FaceDetectorMode.fast,
@@ -151,7 +159,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Future<void> _openCamera(CameraDescription description) async {
     final controller = CameraController(
       description,
-      ResolutionPreset.high,
+      ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.nv21,
     );
@@ -187,12 +195,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Future<void> _onFrame(CameraImage image) async {
     if (_processing || !mounted) return;
     _processing = true;
+    final sw = Stopwatch()..start();
     try {
       await _processFrame(image);
     } catch (_) {
       // نتجاهل أخطاء الإطار الواحد ولا نوقف الشاشة
     } finally {
       _processing = false;
+      sw.stop();
+      _lastLatencyMs = sw.elapsedMilliseconds;
+      _fpsCount++;
+      final now = DateTime.now();
+      if (now.difference(_fpsWindow).inMilliseconds >= 1000) {
+        final fps = _fpsCount * 1000 / now.difference(_fpsWindow).inMilliseconds;
+        _fpsCount = 0;
+        _fpsWindow = now;
+        if (mounted) setState(() => _fps = fps);
+      }
     }
   }
 
@@ -229,9 +248,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       var matchedBox = false;
       final cropped = _cropFace(image, face);
       if (cropped != null) {
-        // كشف الحيوية (اختياري)
+        // كشف الحيوية: استرشادي افتراضياً (لا يمنع التعرّف) حتى معايرته،
+        // لأن عتبة خاطئة ترفض وجوهاً حقيقية فتعطّل التسجيل.
         final spoof = state.faceEngine.spoofScore(cropped);
-        if (spoof != null && spoof > AppConfig.spoofThreshold) {
+        if (AppConfig.enforceLiveness &&
+            spoof != null &&
+            spoof > AppConfig.spoofThreshold) {
           await state.biometrics.logAttempt(result: 'spoof', deviceId: state.deviceId, schoolId: state.schoolId);
           if (fraction != null) {
             boxes.add(_FaceBox(fraction, _BoxState.spoof, 'محاولة انتحال', face.trackingId));
@@ -593,6 +615,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     const SizedBox(width: 6),
                     Text(
                       'يعمل تلقائياً • ${context.watch<AppState>().faceIndex.size} وجه مسجّل'
+                      ' • ${_fps.toStringAsFixed(0)} إطار/ث • $_lastLatencyMsم.ث'
                       '${_unrecognizedCount > 0 ? ' • غير معروف: $_unrecognizedCount' : ''}',
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                     ),
@@ -624,6 +647,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     return Row(
       children: [
         Expanded(child: _chip('مسجّل الجلسة', '$_successCount', AppTheme.success)),
+        const SizedBox(width: 8),
+        Expanded(child: _chip('سرعة الكشف', '$_lastLatencyMsم.ث', AppTheme.primary)),
+        const SizedBox(width: 8),
+        Expanded(child: _chip('إطارات/ث', _fps.toStringAsFixed(0), AppTheme.primary)),
         const SizedBox(width: 8),
         Expanded(child: _chip('غير متزامن', '$_pendingSync', syncColor)),
         const SizedBox(width: 8),
