@@ -44,6 +44,13 @@ flutter build apk --debug       # ينتج build/app/outputs/flutter-apk/app-deb
 - `assets/db/schema.sql` — المخطط الكامل (يُحمَّل عبر `rootBundle`؛ لا توجد نسخة ثانية يجب مزامنتها).
 
 ## إضافات حديثة
+- **تشخيص «البرنامج لا يفتح» على ويندوز**: أضيف في `windows/runner/main.cpp` صندوق خطأ مرئي + ملف `school_startup_error.log` بجانب الملف التنفيذي عند فشل `window.Create`. و`main.dart` يسجّل أعطال Dart في `%APPDATA%\<app>\...\school_crash.log`.
+- **معاينة حيّة لسطح المكتب (بيئة التطوير فقط)**: أُثبت أن نفس كود Flutter يعمل على سطح المكتب فعلياً (أُنشئت قاعدة البيانات `~/.local/share/com.school.school_app/school_db/school.db` بلا أي خطأ). للعرض داخل المتصفح: Xvfb :99 + x11vnc + websockify على المنفذ 12000 (`scripts/start_desktop_view.sh`). هذا عرض حيّ للأصلي عبر VNC — **ليس** Flutter Web، ولا علاقة له ببناء ويندوز.
+- **جذر المشكلة الفعلي**: مستودع `smart-school-system` غير متاح للـtoken (403) ولا يُنشأ أي Release، فلم يحصل المستخدم أبداً على `school_app.exe` حقيقي — لذلك «لا يفتح». الحل: منح الكتابة ثم push لتشغيل الـCI الذي يبني المثبّت وينشره.
+- **مصائد بناء ويندوز (مضبوطة)**: `windows/CMakeLists.txt` يثبّت `windows/RUN-README.txt` — لو غاب يفشل البناء (موجود). الـworkflow يحزم مكتبات VC++ ويتحقق من `flutter_windows.dll` + `school_app.exe`.
+- **البوابة/الحزم (Artifacts) تتطلب تسجيل دخول GitHub**؛ التحميل المباشر يعتمد على Releases فقط.
+
+## إضافات حديثة (سابقة)
 - **بوابة الطالب** (`student_home_screen.dart`): تقرأ فقط ملف الطالب المرتبط بـ`users.student_id` وتقييماته التراكمية؛ لا تعديل ولا رؤية لبيانات طالب آخر.
 - **بوابة ولي الأمر** (`guardian_home_screen.dart`): قراءة فقط للطالب المرتبط عبر `users.linked_student_id`؛ تعرض الحضور والتأخير والغياب والدرجات والتقييمات، بلا تعديل ولا وصول لطالب آخر.
 - **إعدادات الدوام** (`school_settings_repository.dart` + `settings_screen.dart`): أوقات الدوام ونوافذ الحضور، أيام الدوام الأسبوعية، الاستراحات، العطل/الاستثناءات، وقواعد الانصراف — كلها JSON قابلة للضبط بلا تعديل الكود.
