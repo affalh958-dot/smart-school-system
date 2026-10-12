@@ -186,8 +186,8 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2-win
-          name: "نظام إدارة المدرسة الذكي — ويندوز v1.0.2"
+          tag_name: v1.0.3-win
+          name: "نظام إدارة المدرسة الذكي — ويندوز v1.0.3"
           body: |
             نسخة ويندوز الحقيقية (تطبيق مكتبي Flutter).
 
@@ -197,7 +197,7 @@ jobs:
             ملاحظات:
             - مكتبات Visual C++ مُضمّنة بجانب البرنامج (لا حاجة لتثبيت مسبق).
             - إن ظهر تحذير SmartScreen: اضغط «مزيد من المعلومات» ثم «التشغيل على أي حال» (الملف غير موقّع رقمياً؛ التوقيع يتطلب شهادة مدفوعة).
-            - يتم تسجيل أي خطأ بدء تشغيل في `%APPDATA%\school_app\school_crash.log`.
+            - يتم تسجيل أي خطأ بدء تشغيل في `%APPDATA%\com.school\school_app\school_crash.log`.
           files: |
             app/dist/SmartSchool-Setup.exe
             app/dist/SmartSchool-Windows-portable.zip
