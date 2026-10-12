@@ -22,6 +22,13 @@ flutter build apk --debug       # ينتج build/app/outputs/flutter-apk/app-deb
 # ملاحظة: flutter build windows يعمل على مضيف Windows فقط.
 ```
 
+## بناء برنامج ويندوز (حقيقي)
+- **لا يمكن بناء exe ويندوز على لينكس** (Flutter يتطلب MSVC + Windows). الحل المعتمد: GitHub Actions على `windows-latest`.
+- المستودع الخاص: `affalh958-dot/smart-school-system`. الـworkflow: `.github/workflows/build-windows-desktop.yml`.
+- بناء محلي على أي جهاز ويندوز: `scripts/build_windows.bat` (Flutter + VS2022 C++ workload) → `app/build/windows/x64/runner/Release/school_app.exe`.
+- آخر نسخة منشورة (release): وسم `v1.0.0-win` وملف `SmartSchool-Windows-portable.zip` (فك الضغط + تشغيل `school_app.exe` مباشرة، بلا تثبيت).
+- شاشة تسجيل الوجه والكاميرا معطّلة على سطح المكتب برسالة واضحة (التعرّف يتم على الأندرويد عند المدخل).
+
 ## المعمارية
 - `lib/core/` — الحالة (`app_state`)، الصلاحيات (`permissions`)، الأمان (`security`)، الثيم.
 - `lib/data/` — النماذج (`models`) والمستودعات (students, attendance, biometric, academic, grades, reports, audit, student_columns) + `database.dart` (SQLite + ترحيلات) + `export/xlsx_writer.dart`.
