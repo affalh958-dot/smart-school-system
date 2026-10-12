@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -10,10 +13,12 @@ import '../../core/app_state.dart';
 import '../../core/theme.dart';
 import '../../data/academic_repository.dart';
 import '../../data/audit_repository.dart';
+import '../../data/biometric_repository.dart';
 import '../../data/database.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
 import '../../data/student_columns_repository.dart';
+import 'camera_utils.dart';
 
 /// شاشة نموذج الطالب — تُستخدم للإضافة والتعديل، وتدعم الحقول المخصّصة.
 /// تعيد معرّف الطالب عبر Navigator.pop عند الحفظ.
@@ -36,6 +41,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   final _students = StudentRepository();
   final _acad = AcademicRepository();
   final _columnsRepo = StudentColumnsRepository();
+  final _bio = BiometricRepository();
 
   final _number = TextEditingController();
   final _name = TextEditingController();
@@ -53,6 +59,12 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   DateTime? _birthDate;
   String? _sectionId;
   String? _photoPath;
+  /// تمثيل سمات الوجه المقروء من الصورة المرفوعة (يُحوَّل لبصمة عند الحفظ).
+  Float32List? _photoEmbedding;
+  /// المربّع النسبي للوجه داخل الصورة (لإظهار أنه قُرئ فعلاً).
+  Rect? _photoFaceBox;
+  bool _processingPhoto = false;
+  String? _photoStatus;
 
   List<Map<String, dynamic>> _sections = [];
   List<StudentColumn> _columns = [];
@@ -126,21 +138,106 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     if (picked != null) setState(() => _birthDate = picked);
   }
 
-  /// التقاط/اختيار صورة شخصية وحفظها داخل مجلد دعم التطبيق.
+  /// التقاط/اختيار صورة شخصية، وتُقرأ بالكاميرا/المعرض، **ويُتحقّق من الوجه
+  /// بالنموذج**: إن لم يُقرأ وجه واضح يُرفض رفع الصورة ولا تُثبّت البصمة.
   Future<void> _pickPhoto() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.photo_camera),
+            title: const Text('التقاط صورة بالكاميرا'),
+            onTap: () => Navigator.pop(ctx, ImageSource.camera),
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library),
+            title: const Text('اختيار صورة من المعرض'),
+            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+          ),
+        ]),
+      ),
+    );
+    if (source == null) return;
+    final picker = ImagePicker();
+    final shot = await picker.pickImage(source: source, imageQuality: 90, maxWidth: 1200);
+    if (shot == null) return;
+    if (!mounted) return;
+    final state = context.read<AppState>();
+    final engineReady = state.faceEngine.isReady;
+    final green = 'تم قراءة الوجه ✓ — سيُسجَّل كبصمة عند الحفظ';
+    final red = 'لم يُقرأ وجه واضح في الصورة';
+    setState(() {
+      _processingPhoto = true;
+      _photoEmbedding = null;
+      _photoFaceBox = null;
+      _photoStatus = engineReady ? 'جارٍ قراءة الوجه…' : 'معالجة الصورة…';
+    });
     try {
-      final picker = ImagePicker();
-      final shot = await picker.pickImage(source: ImageSource.camera, imageQuality: 70, maxWidth: 600);
-      if (shot == null) return;
+      // 1) كشف الوجه بالكاميرا (نموذج ML Kit الحقيقي).
+      final detector = FaceDetector(
+        options: FaceDetectorOptions(
+          enableClassification: true,
+          performanceMode: FaceDetectorMode.accurate,
+          minFaceSize: 0.08,
+        ),
+      );
+      final faces = await detector.processImage(InputImage.fromFilePath(shot.path));
+      await detector.close();
+      if (faces.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _processingPhoto = false;
+            _photoStatus = red;
+            _photoPath = null;
+          });
+          _snack('$red — أعد الالتقاط بوجه واضح ومضاء مباشرة.', AppTheme.danger);
+        }
+        return;
+      }
+      var best = faces.first;
+      for (final f in faces) {
+        if (f.boundingBox.width > best.boundingBox.width) best = f;
+      }
+      final decoded = img.decodeImage(await File(shot.path).readAsBytes());
+      if (decoded == null) throw StateError('تعذّر قراءة ملف الصورة');
+      final crop = CameraUtils.cropBox(
+          decoded, best.boundingBox.left, best.boundingBox.top, best.boundingBox.width, best.boundingBox.height);
+      if (crop == null) throw StateError('تعذّر قصّ منطقة الوجه');
+      // 2) استخراج السمات بالنموذج (MobileFaceNet). على الحاسوب دون نموذج
+      //    نحفظ الصورة فقط ولا نمنع الإضافة.
+      final emb = engineReady ? state.faceEngine.embed(crop) : null;
+      if (engineReady && emb == null) throw StateError('تعذّر استخراج سمات الوجه من الصورة');
+
+      // 3) حفظ الصورة الشخصية في مجلد دعم التطبيق.
       final dir = await getApplicationSupportDirectory();
       final photoDir = Directory(p.join(dir.path, 'student_photos'));
       if (!photoDir.existsSync()) photoDir.createSync(recursive: true);
       final dest = p.join(photoDir.path, '${DateTime.now().millisecondsSinceEpoch}.jpg');
       await File(shot.path).copy(dest);
       if (!mounted) return;
-      setState(() => _photoPath = dest);
+      setState(() {
+        _photoPath = dest;
+        _photoEmbedding = emb;
+        _photoFaceBox = Rect.fromLTWH(
+          best.boundingBox.left / decoded.width,
+          best.boundingBox.top / decoded.height,
+          best.boundingBox.width / decoded.width,
+          best.boundingBox.height / decoded.height,
+        );
+        _processingPhoto = false;
+        _photoStatus = engineReady ? green : 'حُفظت الصورة (قراءة الوجه تتطلّب تطبيق الأندرويد)';
+      });
     } catch (e) {
-      _snack('تعذّر اختيار الصورة: $e', AppTheme.danger);
+      if (mounted) {
+        setState(() {
+          _processingPhoto = false;
+          _photoStatus = red;
+          _photoPath = null;
+          _photoEmbedding = null;
+        });
+        _snack('$red: $e', AppTheme.danger);
+      }
     }
   }
 
@@ -203,6 +300,22 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       final customValues = {for (final c in _columns) c.id: _custom[c.id]?.text.trim() ?? ''};
       if (customValues.isNotEmpty) await _columnsRepo.setValues(id, customValues);
 
+      // تسجيل بصمة الوجه من الصورة المرفوعة (إن قرأها النموذج).
+      bool faceRegistered = false;
+      final emb = _photoEmbedding;
+      if (emb != null) {
+        if (!mounted) return;
+        final state = context.read<AppState>();
+        await _bio.upsertTemplate(
+          studentId: id,
+          embedding: emb,
+          quality: 0.85,
+          enrolledBy: _currentUserId,
+        );
+        await state.rebuildFaceIndex();
+        faceRegistered = true;
+      }
+
       await AuditRepository().log(
         userId: _currentUserId,
         action: f == null ? 'student.create' : 'student.update',
@@ -212,8 +325,10 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       );
 
       if (!mounted) return;
-      _snack(addAnother ? 'تمت الإضافة — أضف الطالب التالي' : (f == null ? 'تمت إضافة الطالب بنجاح' : 'تم حفظ التعديلات'),
-          AppTheme.success);
+      final base = addAnother
+          ? 'تمت الإضافة — أضف الطالب التالي'
+          : (f == null ? 'تمت إضافة الطالب بنجاح' : 'تم حفظ التعديلات');
+      _snack(faceRegistered ? '$base • تم تسجيل بصمة الوجه ✓' : base, AppTheme.success);
       if (addAnother) {
         _number.clear();
         _name.clear();
@@ -243,6 +358,10 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     _notes.clear();
     _gender = null;
     _birthDate = null;
+    _photoPath = null;
+    _photoEmbedding = null;
+    _photoFaceBox = null;
+    _photoStatus = null;
   }
 
   void _snack(String m, Color c) {
@@ -334,23 +453,62 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
 
   Widget _photoPicker() {
     final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
+    final readOk = _photoEmbedding != null;
     return Column(children: [
-      GestureDetector(
-        onTap: _pickPhoto,
-        child: CircleAvatar(
-          radius: 46,
-          backgroundColor: AppTheme.primary.withValues(alpha: 0.12),
-          backgroundImage: hasPhoto ? FileImage(File(_photoPath!)) : null,
-          child: hasPhoto
-              ? null
-              : const Icon(Icons.add_a_photo, size: 32, color: AppTheme.primary),
-        ),
+      Stack(
+        alignment: Alignment.center,
+        children: [
+          GestureDetector(
+            onTap: _processingPhoto ? null : _pickPhoto,
+            child: SizedBox(
+              width: 104,
+              height: 104,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipOval(
+                    child: hasPhoto
+                        ? Image.file(File(_photoPath!), fit: BoxFit.cover)
+                        : Container(
+                            color: AppTheme.primary.withValues(alpha: 0.12),
+                            child: const Icon(Icons.add_a_photo, size: 32, color: AppTheme.primary),
+                          ),
+                  ),
+                  // مربّع أخضر حول الوجه المقروء (دليل أن النموذج قرأه فعلاً).
+                  if (readOk && _photoFaceBox != null)
+                    CustomPaint(painter: _PhotoFacePainter(_photoFaceBox!)),
+                  if (readOk)
+                    const Positioned(
+                      bottom: 2,
+                      right: 2,
+                      child: Icon(Icons.check_circle, color: AppTheme.success, size: 22),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (_processingPhoto)
+            const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)),
+        ],
       ),
       TextButton.icon(
-        onPressed: _pickPhoto,
+        onPressed: _processingPhoto ? null : _pickPhoto,
         icon: const Icon(Icons.photo_camera, size: 18),
         label: Text(hasPhoto ? 'تغيير الصورة' : 'التقاط صورة شخصية'),
       ),
+      if (_photoStatus != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            _photoStatus!,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: readOk ? AppTheme.success : (_processingPhoto ? AppTheme.textMuted : AppTheme.danger),
+            ),
+          ),
+        ),
     ]);
   }
 
@@ -421,4 +579,28 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
         c.dataType == 'number' ? Icons.numbers : Icons.edit_note,
         keyboard: c.dataType == 'number' ? TextInputType.number : null);
   }
+}
+
+/// يرسم مربّعاً أخضر حول الوجه المقروء داخل الصورة الشخصية الدائرية.
+class _PhotoFacePainter extends CustomPainter {
+  _PhotoFacePainter(this.fraction);
+  final Rect fraction;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = Rect.fromLTWH(
+      fraction.left * size.width,
+      fraction.top * size.height,
+      fraction.width * size.width,
+      fraction.height * size.height,
+    );
+    final paint = Paint()
+      ..color = AppTheme.success
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    canvas.drawRRect(RRect.fromRectAndRadius(r, const Radius.circular(6)), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PhotoFacePainter old) => old.fraction != fraction;
 }
