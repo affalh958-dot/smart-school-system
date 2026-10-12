@@ -7,7 +7,9 @@ import '../../core/theme.dart';
 import '../../data/attendance_repository.dart';
 import '../../data/repositories.dart';
 import 'attendance_screen.dart';
+import 'academic_screen.dart';
 import 'face_enroll_screen.dart';
+import 'grades_screen.dart';
 import 'login_screen.dart';
 import 'reports_screen.dart';
 import 'settings_screen.dart';
@@ -194,6 +196,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (state.can(Perms.studentRead)) {
       list.add(_MenuItem('الطلاب', 'إضافة وبحث وتعديل ملفات الطلاب', Icons.people, AppTheme.accent,
           () => _push(const StudentsScreen())));
+    }
+    if (state.can(Perms.settingsManage)) {
+      list.add(_MenuItem('الهيكل المدرسي', 'المراحل والصفوف والشعب والمدرسون والمواد', Icons.account_tree, AppTheme.primary,
+          () => _push(const AcademicScreen())));
+    }
+    if (state.can(Perms.gradeRead)) {
+      list.add(_MenuItem('الدرجات والامتحانات', 'إنشاء امتحانات وإدخال الدرجات', Icons.grade, AppTheme.accent,
+          () => _push(const GradesScreen())));
     }
     if (state.can(Perms.reportRead)) {
       list.add(_MenuItem('التقارير', 'الحضور والغياب والتأخير', Icons.bar_chart, AppTheme.success,

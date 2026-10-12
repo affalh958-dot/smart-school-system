@@ -4,9 +4,11 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:school_app/core/permissions.dart';
 import 'package:school_app/core/security.dart';
+import 'package:school_app/data/academic_repository.dart';
 import 'package:school_app/data/attendance_repository.dart';
 import 'package:school_app/data/biometric_repository.dart';
 import 'package:school_app/data/database.dart';
+import 'package:school_app/data/grade_repository.dart';
 import 'package:school_app/data/models.dart';
 import 'package:school_app/data/repositories.dart';
 import 'package:school_app/face/face_index.dart';
@@ -32,6 +34,18 @@ void main() {
       'id': schoolId,
       'name': 'مدرسة الاختبار',
       'timezone': 'Asia/Baghdad',
+      'is_active': 1,
+      'created_at': now,
+      'updated_at': now,
+    });
+    // مستخدم مرجعي لسجلات التدقيق (entered_by / changed_by مفتاح أجنبي).
+    await db.insert('users', {
+      'id': 'u1',
+      'school_id': schoolId,
+      'username': 'tester',
+      'password_hash': 'x',
+      'password_salt': 'x',
+      'full_name': 'مستخدم اختبار',
       'is_active': 1,
       'created_at': now,
       'updated_at': now,
@@ -287,11 +301,159 @@ void main() {
       expect(school2Students.any((s) => s.studentNumber == '5001'), isTrue);
     });
   });
+
+  group('الهيكل المدرسي', () {
+    test('إضافة مرحلة وصف وشعبة وربط الطالب بها', () async {
+      final acad = AcademicRepository();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'الابتدائية');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'الأول');
+      final yearId = await _currentYear();
+      final sectionId = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'أ');
+
+      final sections = await acad.sectionsWithNames(schoolId, yearId);
+      expect(sections.any((s) => s['name'] == 'أ'), isTrue);
+
+      final sid = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9001', fullName: 'طالب شعبة', sectionId: sectionId));
+      final inSection = await StudentRepository().bySection(sectionId);
+      expect(inSection.map((e) => e.id), contains(sid));
+    });
+
+    test('منع حذف شعبة مرتبطة بطلاب', () async {
+      final acad = AcademicRepository();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'الثانوية');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'الثاني');
+      final yearId = await _currentYear();
+      final sectionId = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'ب');
+      await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9002', fullName: 'طالب مرتبط', sectionId: sectionId));
+
+      expect(await acad.sectionHasRecords(sectionId), isTrue);
+      await expectLater(acad.archiveSection(sectionId), throwsStateError);
+    });
+
+    test('منع تكرار اسم المرحلة داخل المدرسة', () async {
+      final acad = AcademicRepository();
+      await acad.addStage(schoolId: schoolId, name: 'مرحلة فريدة');
+      await expectLater(acad.addStage(schoolId: schoolId, name: 'مرحلة فريدة'), throwsA(anything));
+    });
+
+    test('تكليف مدرّس بمادة وشعبة', () async {
+      final acad = AcademicRepository();
+      final teacherId = await acad.addTeacher(schoolId: schoolId, employeeNo: 'T100', fullName: 'أستاذ الرياضيات');
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'الرياضيات');
+      final yearId = await _currentYear();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'مرحلة التكليف');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'الثالث');
+      final sectionId = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'ج');
+
+      await acad.assignTeacher(
+          teacherId: teacherId, subjectId: subjectId, sectionId: sectionId, academicYearId: yearId);
+      final list = await acad.assignments(schoolId, yearId);
+      expect(list.any((a) => a['teacher_name'] == 'أستاذ الرياضيات' && a['subject_name'] == 'الرياضيات'), isTrue);
+    });
+  });
+
+  group('الدرجات والامتحانات', () {
+    test('إدخال درجة داخل النطاق ورفض خارج النطاق', () async {
+      final acad = AcademicRepository();
+      final repo = GradeRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'العلوم');
+      final yearId = await _currentYear();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'مرحلة الدرجات');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'الرابع');
+      final sectionId = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'د');
+      final studentId = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9500', fullName: 'طالب الدرجات', sectionId: sectionId));
+
+      final examId = await repo.createExam(
+          subjectId: subjectId, sectionId: sectionId, academicYearId: yearId,
+          examType: 'شهري', maxScore: 100, passScore: 50);
+
+      await repo.setScore(examId: examId, studentId: studentId, score: 87, enteredBy: 'u1');
+      final scores = await repo.examScores(examId);
+      expect(scores.any((s) => s['full_name'] == 'طالب الدرجات' && (s['score'] as num).toDouble() == 87), isTrue);
+
+      await expectLater(
+        repo.setScore(examId: examId, studentId: studentId, score: 120, enteredBy: 'u1'),
+        throwsStateError,
+      );
+    });
+
+    test('تصحيح درجة يسجّل تدقيقاً بسبب إلزامي', () async {
+      final acad = AcademicRepository();
+      final repo = GradeRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'اللغة');
+      final yearId = await _currentYear();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'مرحلة التصحيح');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'الخامس');
+      final sectionId = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'هـ');
+      final studentId = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9501', fullName: 'طالب التصحيح', sectionId: sectionId));
+      final examId = await repo.createExam(
+          subjectId: subjectId, sectionId: sectionId, academicYearId: yearId, examType: 'نهائي', maxScore: 50);
+
+      await repo.setScore(examId: examId, studentId: studentId, score: 30, enteredBy: 'u1');
+      final before = await repo.auditCount();
+      // تصحيح بسبب
+      await repo.setScore(
+          examId: examId, studentId: studentId, score: 40, enteredBy: 'u1', isCorrection: true, reason: 'خطأ في الرصد');
+      expect(await repo.auditCount(), before + 1);
+      // تصحيح دون سبب يُرفض
+      await expectLater(
+        repo.setScore(examId: examId, studentId: studentId, score: 45, enteredBy: 'u1', isCorrection: true),
+        throwsStateError,
+      );
+    });
+
+    test('المجموع المرجّح يُحسب بقواعد قابلة للضبط', () async {
+      final acad = AcademicRepository();
+      final repo = GradeRepository();
+      final subjectId = await acad.addSubject(schoolId: schoolId, name: 'الرياضة');
+      final yearId = await _currentYear();
+      final stageId = await acad.addStage(schoolId: schoolId, name: 'مرحلة المجموع');
+      final gradeId = await acad.addGrade(stageId: stageId, name: 'السادس');
+      final sectionId = await acad.addSection(gradeId: gradeId, academicYearId: yearId, name: 'و');
+      final studentId = await StudentRepository().create(Student(
+          id: '', schoolId: schoolId, studentNumber: '9502', fullName: 'طالب المجموع', sectionId: sectionId));
+
+      final e1 = await repo.createExam(
+          subjectId: subjectId, sectionId: sectionId, academicYearId: yearId, examType: 'شهري1', maxScore: 100, weight: 1);
+      final e2 = await repo.createExam(
+          subjectId: subjectId, sectionId: sectionId, academicYearId: yearId, examType: 'شهري2', maxScore: 50, weight: 1);
+      await repo.setScore(examId: e1, studentId: studentId, score: 80, enteredBy: 'u1');
+      await repo.setScore(examId: e2, studentId: studentId, score: 40, enteredBy: 'u1'); // 40/50 = 80%
+
+      final total = await repo.weightedTotal(studentId, subjectId, yearId);
+      expect(total, closeTo(80, 0.01));
+    });
+  });
 }
 
 String _today() {
   final d = DateTime.now();
   return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+/// يعيد السنة الدراسية الحالية للمدرسة أو ينشئها (للاختبارات التي تحتاج شعبة).
+Future<String> _currentYear() async {
+  final db = await AppDatabase.instance.database;
+  final rows = await db.query('academic_years',
+      where: 'school_id = ? AND deleted_at IS NULL', whereArgs: ['school-1'], orderBy: 'is_current DESC', limit: 1);
+  if (rows.isNotEmpty) return rows.first['id'] as String;
+  final now = DateTime.now().toUtc().toIso8601String();
+  final id = 'year-test';
+  await db.insert('academic_years', {
+    'id': id,
+    'school_id': 'school-1',
+    'name': '2025/2026',
+    'start_date': '2025-09-01',
+    'end_date': '2026-06-30',
+    'is_current': 1,
+    'created_at': now,
+    'updated_at': now,
+  });
+  return id;
 }
 
 Float32List _vec(List<double> v) {
