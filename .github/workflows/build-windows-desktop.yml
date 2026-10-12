@@ -135,17 +135,21 @@ jobs:
         shell: pwsh
         run: |
           # ملف تشغيل يُظهر أي خطأ بدل الفشل الصامت للفني/المدير.
-          $bat = @'
-@echo off
-chcp 65001 >nul
-cd /d "%~dp0"
-echo تشغيل نظام إدارة المدرسة الذكي...
-school_app.exe
-echo.
-echo إن لم تظهر النافذة، اقرأ الملف: school_startup_error.log
-pause
-'@
-          Set-Content -Path "build/windows/x64/runner/Release/run_school_app.bat" -Value $bat -Encoding UTF8
+          $bat = @(
+            "echo off",
+            "chcp 65001 >nul",
+            "cd /d ""%~dp0""",
+            "echo تشغيل نظام إدارة المدرسة الذكي...",
+            "school_app.exe",
+            "echo.",
+            "if not exist school_startup_error.log goto done",
+            "echo ---- school_startup_error.log ----",
+            "type school_startup_error.log",
+            ":done",
+            "echo إن لم تظهر النافذة اقرأ الملف school_startup_error.log",
+            "pause"
+          ) -join "`r`n"
+          Set-Content -Path "build/windows/x64/runner/Release/run_school_app.bat" -Value "@$bat" -Encoding OEM
           Write-Host "Added run_school_app.bat"
 
       - name: Upload Windows app (Release folder)
