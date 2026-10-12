@@ -40,52 +40,30 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
-      - name: Bundle Visual C++ runtime (app-local, no install needed)
+      - name: Ensure Visual C++ runtime (copy NEWEST only, never an old one)
         shell: pwsh
         run: |
-          # ننسخ مكتبات VC++ بجانب البرنامج حتى يعمل على أي جهاز بلا تثبيت مسبق.
-          # هذا سبب شائع لعدم فتح school_app.exe بالنقر على أجهزة لا تحتوي
-          # حزمة إعادة التوزيع Visual C++.
+          # سبب انهيار البرنامج (0xC0000005 في MSVCP140.dll): حزم نسخة قديمة
+          # (14.29 من VS2019) بجانب البرنامج يجعل ويندوز يحمّلها بدل النسخة
+          # الصحيحة فيُحدث انتهاك وصول. لذلك ننسخ **أحدث** نسخة فقط، وأفضل
+          # مصدر هو System32 (نسخة المشغّل المطابقة للأداة). وإن لم تتوفر
+          # نترك CRT النظام يعمل (لا ننسخ شيئاً).
           $dest = (Resolve-Path "build/windows/x64/runner/Release").Path
-          $files = @(
-            "msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll","msvcp140_atomic_wait.dll",
-            "msvcp140_codecvt_ids.dll","vcruntime140.dll","vcruntime140_1.dll",
-            "vcruntime140_threads.dll","concrt140.dll"
-          )
+          $needed = @("msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll")
           $copied = 0
-
-          # 1) نبحث في حِزم إعادة التوزيع الحقيقية VC++ (Redist) داخل Visual Studio.
-          $vsRoots = @(
-            "C:\Program Files\Microsoft Visual Studio",
-            "C:\Program Files (x86)\Microsoft Visual Studio"
-          )
-          foreach ($r in $vsRoots) {
-            if (-not (Test-Path $r)) { continue }
-            $cand = Get-ChildItem -Path $r -Recurse -Filter "vcruntime140.dll" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.FullName -match "\\Redist\\" -and $_.FullName -match "\\x64\\" } |
-                    Select-Object -First 1
-            if ($cand) {
-              Copy-Item "$($cand.Directory.FullName)\*.dll" $dest -Force -ErrorAction SilentlyContinue
-              $copied++
-              Write-Host "Bundled VC++ runtime from $($cand.Directory.FullName)"
-            }
+          foreach ($f in $needed) {
+            $sys = Join-Path $env:SystemRoot "System32\$f"
+            if (Test-Path $sys) { Copy-Item $sys $dest -Force; $copied++; Write-Host "Copied $f from System32" }
           }
-
-          # 2) احتياطي: ننسخ من System32 (موجودة على المشغّل).
-          if ($copied -eq 0) {
-            foreach ($f in $files) {
-              $src = Join-Path $env:SystemRoot "System32\$f"
-              if (Test-Path $src) { Copy-Item $src $dest -Force; $copied++ }
-            }
-            Write-Host "Bundled VC++ runtime from System32"
+          if ($copied -eq 0) { Write-Host "System32 CRT not found; relying on system-wide VC++ runtime (no local copy)." }
+          # تحقق: لا نسمح بنسخة MSVCP140 أقدم من 14.30 (VS2022) إن وُجدت.
+          $local = Join-Path $dest "msvcp140.dll"
+          if (Test-Path $local) {
+            $ver = (Get-Item $local).VersionInfo.FileVersion
+            Write-Host "Local MSVCP140.dll version: $ver"
+            $parts = ($ver -split ' ')[0] -split '\.'
+            if ([int]$parts[1] -lt 30) { throw "STALE MSVCP140.dll ($ver) would crash the app — aborting." }
           }
-
-          # التحقق النهائي من وجود المكتبات الحيوية بجانب البرنامج.
-          foreach ($f in @("vcruntime140.dll","msvcp140.dll","flutter_windows.dll","school_app.exe")) {
-            if (-not (Test-Path (Join-Path $dest $f))) { throw "Missing $f in output folder" }
-          }
-          Write-Host "VC++ CRT present. Folder contents:"
-          Get-ChildItem $dest -Filter "*.dll" | Select-Object -ExpandProperty Name
 
       - name: Verify exe exists
         shell: pwsh
