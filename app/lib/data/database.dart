@@ -53,7 +53,7 @@ class AppDatabase {
   Future<Database> _create(String dbPath, String schema) async {
     return openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onConfigure: (d) async {
         await d.execute('PRAGMA foreign_keys = ON');
       },
@@ -63,10 +63,32 @@ class AppDatabase {
           await d.execute(stmt);
         }
       },
+      onUpgrade: (d, oldVersion, newVersion) async {
+        // ترحيل آمن من 1 → 2: إضافة عزل المدرسة لسجلات التعرّف ومحاولات المراجعة.
+        // نتحقق من وجود العمود أولاً حتى لا يفشل إن كان مضافاً مسبقاً.
+        await _addColumnIfMissing(d, 'recognition_attempts', 'school_id TEXT REFERENCES schools(id)');
+        await _addColumnIfMissing(d, 'recognition_reviews', 'school_id TEXT REFERENCES schools(id)');
+        try {
+          await d.execute('CREATE INDEX IF NOT EXISTS idx_attempts_school ON recognition_attempts(school_id, attempted_at)');
+          await d.execute('CREATE INDEX IF NOT EXISTS idx_reviews_school ON recognition_reviews(school_id, status)');
+        } catch (_) {}
+      },
       onOpen: (d) async {
         await d.execute('PRAGMA foreign_keys = ON');
       },
     );
+  }
+
+  /// إضافة عمود إن لم يكن موجوداً (SQLite لا يدعم IF NOT EXISTS للأعمدة).
+  Future<void> _addColumnIfMissing(Database d, String table, String columnDef) async {
+    final columnName = columnDef.split(' ').first;
+    final info = await d.rawQuery('PRAGMA table_info($table)');
+    final exists = info.any((c) => c['name'] == columnName);
+    if (!exists) {
+      // SQLite لا يسمح بإضافة عمود بمفتاح أجنبي مباشرة في بعض الإصدارات — نضيفه كنص.
+      final safeDef = columnDef.replaceAll(RegExp(r'\s+REFERENCES\s+\w+\([^)]*\)'), '');
+      await d.execute('ALTER TABLE $table ADD COLUMN $safeDef');
+    }
   }
 
   /// تقسيم ملف SQL إلى عبارات (يحترم الفواصل المنقوطة داخل النصوص).

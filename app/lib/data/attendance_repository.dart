@@ -27,8 +27,19 @@ class AttendanceRepository {
     double? confidence,
     String? clientUuid,
     DateTime? at,
+    String? schoolId,
   }) async {
     final db = await AppDatabase.instance.database;
+
+    // تحقق العزل: الطالب يجب أن ينتمي للمدرسة الحالية (إن مُرّرت).
+    if (schoolId != null) {
+      final own = await db.query('students',
+          columns: ['id'], where: 'id = ? AND school_id = ?', whereArgs: [studentId, schoolId], limit: 1);
+      if (own.isEmpty) {
+        return RecordResult(RecordOutcome.notFound, 'الطالب لا ينتمي إلى هذه المدرسة');
+      }
+    }
+
     final now = (at ?? DateTime.now()).toUtc();
     final date = _dateOnly(now);
     final cuuid = clientUuid ?? _uuid.v4();
@@ -75,11 +86,19 @@ class AttendanceRepository {
     required String newStatus,
     required String changedByUserId,
     required String reason,
+    String? schoolId,
   }) async {
     final db = await AppDatabase.instance.database;
     final now = DateTime.now().toUtc().toIso8601String();
     final rows = await db.query('attendance_records', where: 'id = ?', whereArgs: [recordId], limit: 1);
     if (rows.isEmpty) throw StateError('السجل غير موجود');
+    // تحقق العزل عند تمرير المدرسة.
+    if (schoolId != null) {
+      final sid = rows.first['student_id'] as String;
+      final own = await db.query('students',
+          columns: ['id'], where: 'id = ? AND school_id = ?', whereArgs: [sid, schoolId], limit: 1);
+      if (own.isEmpty) throw StateError('السجل لا ينتمي إلى هذه المدرسة');
+    }
     final oldStatus = rows.first['status'] as String;
 
     await db.transaction((txn) async {
@@ -98,41 +117,77 @@ class AttendanceRepository {
     });
   }
 
-  Future<List<AttendanceRecord>> byDate(String date, {String? status, String? sessionType}) async {
+  Future<List<AttendanceRecord>> byDate(String date, {String? status, String? sessionType, String? schoolId}) async {
     final db = await AppDatabase.instance.database;
-    final where = StringBuffer('session_date = ? AND deleted_at IS NULL');
-    final args = <dynamic>[date];
+    if (schoolId == null) {
+      final where = StringBuffer('session_date = ? AND deleted_at IS NULL');
+      final args = <dynamic>[date];
+      if (status != null) {
+        where.write(' AND status = ?');
+        args.add(status);
+      }
+      if (sessionType != null) {
+        where.write(' AND session_type = ?');
+        args.add(sessionType);
+      }
+      final rows = await db.query('attendance_records', where: where.toString(), whereArgs: args, orderBy: 'recorded_at DESC');
+      return rows.map(AttendanceRecord.fromMap).toList();
+    }
+    final where = StringBuffer('ar.session_date = ? AND ar.deleted_at IS NULL AND s.school_id = ?');
+    final args = <dynamic>[date, schoolId];
     if (status != null) {
-      where.write(' AND status = ?');
+      where.write(' AND ar.status = ?');
       args.add(status);
     }
     if (sessionType != null) {
-      where.write(' AND session_type = ?');
+      where.write(' AND ar.session_type = ?');
       args.add(sessionType);
     }
-    final rows = await db.query('attendance_records', where: where.toString(), whereArgs: args, orderBy: 'recorded_at DESC');
+    final rows = await db.rawQuery('''
+      SELECT ar.* FROM attendance_records ar
+      JOIN students s ON s.id = ar.student_id
+      WHERE $where
+      ORDER BY ar.recorded_at DESC
+    ''', args);
     return rows.map(AttendanceRecord.fromMap).toList();
   }
 
-  /// إحصاءات سريعة ليوم معيّن.
-  Future<Map<String, int>> dailyStats(String date) async {
+  /// إحصاءات سريعة ليوم معيّن (مقيّدة بالمدرسة عند تمريرها).
+  Future<Map<String, int>> dailyStats(String date, {String? schoolId}) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
-      SELECT status, COUNT(*) c FROM attendance_records
-      WHERE session_date = ? AND session_type = 'morning' AND deleted_at IS NULL
-      GROUP BY status
-    ''', [date]);
     final stats = <String, int>{'present': 0, 'late': 0, 'absent': 0, 'excused': 0, 'early_leave': 0};
+    List<Map<String, Object?>> rows;
+    if (schoolId == null) {
+      rows = await db.rawQuery('''
+        SELECT status, COUNT(*) c FROM attendance_records
+        WHERE session_date = ? AND session_type = 'morning' AND deleted_at IS NULL
+        GROUP BY status
+      ''', [date]);
+    } else {
+      rows = await db.rawQuery('''
+        SELECT ar.status AS status, COUNT(*) c
+        FROM attendance_records ar
+        JOIN students s ON s.id = ar.student_id
+        WHERE ar.session_date = ? AND ar.session_type = 'morning'
+          AND ar.deleted_at IS NULL AND s.school_id = ?
+        GROUP BY ar.status
+      ''', [date, schoolId]);
+    }
     for (final r in rows) {
       stats[r['status'] as String] = (r['c'] as int);
     }
     return stats;
   }
 
-  /// الحالات التي تحتاج مراجعة.
-  Future<int> pendingReviews() async {
+  /// الحالات التي تحتاج مراجعة (مقيّدة بالمدرسة عند تمريرها).
+  Future<int> pendingReviews({String? schoolId}) async {
     final db = await AppDatabase.instance.database;
-    final r = await db.rawQuery("SELECT COUNT(*) c FROM recognition_reviews WHERE status = 'pending'");
+    if (schoolId == null) {
+      final r = await db.rawQuery("SELECT COUNT(*) c FROM recognition_reviews WHERE status = 'pending'");
+      return Sqflite.firstIntValue(r) ?? 0;
+    }
+    final r = await db.rawQuery(
+        "SELECT COUNT(*) c FROM recognition_reviews WHERE status = 'pending' AND school_id = ?", [schoolId]);
     return Sqflite.firstIntValue(r) ?? 0;
   }
 

@@ -363,6 +363,7 @@ CREATE INDEX IF NOT EXISTS idx_bio_student ON biometric_templates(student_id);
 
 CREATE TABLE IF NOT EXISTS recognition_attempts (
   id                 TEXT PRIMARY KEY,
+  school_id          TEXT REFERENCES schools(id),
   device_id          TEXT REFERENCES devices(id),
   attempted_at       TEXT NOT NULL,
   result             TEXT NOT NULL,
@@ -371,10 +372,12 @@ CREATE TABLE IF NOT EXISTS recognition_attempts (
   quality_score      REAL,
   created_at         TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_attempts_dev ON recognition_attempts(device_id, attempted_at);
+CREATE INDEX IF NOT EXISTS idx_attempts_dev    ON recognition_attempts(device_id, attempted_at);
+CREATE INDEX IF NOT EXISTS idx_attempts_school ON recognition_attempts(school_id, attempted_at);
 
 CREATE TABLE IF NOT EXISTS recognition_reviews (
   id              TEXT PRIMARY KEY,
+  school_id       TEXT REFERENCES schools(id),
   attempt_id      TEXT REFERENCES recognition_attempts(id) ON DELETE CASCADE,
   student_id      TEXT REFERENCES students(id),
   status          TEXT NOT NULL DEFAULT 'pending',
@@ -384,6 +387,7 @@ CREATE TABLE IF NOT EXISTS recognition_reviews (
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_reviews_school ON recognition_reviews(school_id, status);
 
 -- ---------------------------------------------------------------------------
 -- 7) الدرجات والامتحانات

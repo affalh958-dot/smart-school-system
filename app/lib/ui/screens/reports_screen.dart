@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../core/app_state.dart';
 import '../../core/theme.dart';
 import '../../data/attendance_repository.dart';
 import '../../data/models.dart';
@@ -31,8 +33,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final att = AttendanceRepository();
-    final recs = await att.byDate(_dateStr, status: _filter == 'all' ? null : _filter);
-    final stats = await att.dailyStats(_dateStr);
+    final state = context.read<AppState>();
+    final recs = await att.byDate(_dateStr, status: _filter == 'all' ? null : _filter, schoolId: state.schoolId);
+    final stats = await att.dailyStats(_dateStr, schoolId: state.schoolId);
     if (!mounted) return;
     setState(() {
       _records = recs;

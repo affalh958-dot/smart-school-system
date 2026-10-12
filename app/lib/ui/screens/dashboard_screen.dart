@@ -42,8 +42,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final today = DateTime.now();
       final date = '${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
       final att = AttendanceRepository();
-      final stats = await att.dailyStats(date);
-      final pending = await att.pendingReviews();
+      final stats = await att.dailyStats(date, schoolId: state.schoolId);
+      final pending = await att.pendingReviews(schoolId: state.schoolId);
       var total = 0;
       if (state.schoolId != null) {
         total = await StudentRepository().countAll(state.schoolId!);

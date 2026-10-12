@@ -79,9 +79,9 @@ class AppState extends ChangeNotifier {
     return _deviceId!;
   }
 
-  /// إعادة بناء فهرس الوجه من قاعدة البيانات (يُستدعى عند بدء شاشة الحضور).
+  /// إعادة بناء فهرس الوجه من قاعدة البيانات (مقيّد بمدرسة المستخدم الحالي).
   Future<void> rebuildFaceIndex() async {
-    final templates = await biometrics.loadAllActive();
+    final templates = await biometrics.loadAllActive(schoolId: _schoolId);
     faceIndex.build(templates);
     notifyListeners();
   }

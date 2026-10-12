@@ -50,11 +50,19 @@ class BiometricRepository {
     }
   }
 
-  /// تحميل كل التمثيلات النشطة لبناء فهرس المطابقة (محمّل مرّة واحدة).
-  Future<List<BiometricTemplate>> loadAllActive() async {
+  /// تحميل التمثيلات النشطة — مقيّدة بالمدرسة عند تمريرها (عزل تام).
+  Future<List<BiometricTemplate>> loadAllActive({String? schoolId}) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.query('biometric_templates',
-        where: 'is_active = 1 AND deleted_at IS NULL');
+    List<Map<String, Object?>> rows;
+    if (schoolId == null) {
+      rows = await db.query('biometric_templates', where: 'is_active = 1 AND deleted_at IS NULL');
+    } else {
+      rows = await db.rawQuery('''
+        SELECT bt.* FROM biometric_templates bt
+        JOIN students s ON s.id = bt.student_id
+        WHERE bt.is_active = 1 AND bt.deleted_at IS NULL AND s.school_id = ?
+      ''', [schoolId]);
+    }
     return rows
         .map((r) => BiometricTemplate(
               id: r['id'] as String,
@@ -83,6 +91,27 @@ class BiometricRepository {
     return Sqflite.firstIntValue(r) ?? 0;
   }
 
+  /// مجموعة معرّفات الطلاب الذين لديهم تمثيل وجه نشط (للعرض والتحقق من الحالة).
+  Future<Set<String>> enrolledStudentIds({String? schoolId, String? sectionId}) async {
+    final db = await AppDatabase.instance.database;
+    final where = StringBuffer('bt.is_active = 1 AND bt.deleted_at IS NULL');
+    final args = <dynamic>[];
+    if (schoolId != null) {
+      where.write(' AND s.school_id = ?');
+      args.add(schoolId);
+    }
+    if (sectionId != null) {
+      where.write(' AND s.section_id = ?');
+      args.add(sectionId);
+    }
+    final rows = await db.rawQuery('''
+      SELECT DISTINCT bt.student_id FROM biometric_templates bt
+      JOIN students s ON s.id = bt.student_id
+      WHERE $where
+    ''', args);
+    return rows.map((r) => r['student_id'] as String).toSet();
+  }
+
   /// تسجيل محاولة تعرّف (للتدقيق والمراجعة) — منفصل عن سجل الحضور.
   Future<String> logAttempt({
     required String result,
@@ -90,12 +119,14 @@ class BiometricRepository {
     String? matchedStudentId,
     double? confidence,
     double? quality,
+    String? schoolId,
   }) async {
     final db = await AppDatabase.instance.database;
     final id = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
     await db.insert('recognition_attempts', {
       'id': id,
+      'school_id': schoolId,
       'device_id': deviceId,
       'attempted_at': now,
       'result': result,
@@ -107,6 +138,7 @@ class BiometricRepository {
     if (result == 'ambiguous' || result == 'no_match' || result == 'low_quality') {
       await db.insert('recognition_reviews', {
         'id': _uuid.v4(),
+        'school_id': schoolId,
         'attempt_id': id,
         'student_id': matchedStudentId,
         'status': 'pending',

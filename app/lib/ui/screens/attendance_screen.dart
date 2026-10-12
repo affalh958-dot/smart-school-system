@@ -10,8 +10,10 @@ import '../../core/app_state.dart';
 import '../../core/config.dart';
 import '../../core/theme.dart';
 import '../../data/attendance_repository.dart';
+import '../../data/database.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
+import 'camera_utils.dart';
 
 /// شاشة الحضور المستمرة — أهم ميزة في النظام.
 ///
@@ -44,6 +46,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   String? _initError;
   int _successCount = 0;
   final int _reviewCount = 0;
+
+  /// وقت اعتبار التأخير من إعدادات المدرسة (افتراضي 07:30).
+  int _lateHour = 7;
+  int _lateMinute = 30;
 
   /// مهلة لكل طالب لمنع الاحتساب المتكرر أثناء بقائه أمام الكاميرا.
   final Map<String, DateTime> _cooldown = {};
@@ -78,6 +84,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       await controller.startImageStream(_onFrame);
       if (!mounted) return;
       final state = context.read<AppState>();
+      await _loadLateSetting(state.schoolId);
       await state.rebuildFaceIndex();
       if (!mounted) return;
       setState(() {
@@ -119,7 +126,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       // كشف الحيوية (اختياري)
       final spoof = state.faceEngine.spoofScore(cropped);
       if (spoof != null && spoof > AppConfig.spoofThreshold) {
-        await state.biometrics.logAttempt(result: 'spoof', deviceId: state.deviceId);
+        await state.biometrics.logAttempt(result: 'spoof', deviceId: state.deviceId, schoolId: state.schoolId);
         continue;
       }
 
@@ -129,7 +136,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final match = state.faceIndex.identify(embedding);
       if (!match.accepted || match.studentId == null) {
         if (match.result != 'no_match') {
-          await state.biometrics.logAttempt(result: match.result, deviceId: state.deviceId, confidence: match.score);
+          await state.biometrics.logAttempt(
+              result: match.result, deviceId: state.deviceId, confidence: match.score, schoolId: state.schoolId);
         }
         continue;
       }
@@ -153,6 +161,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         source: 'face',
         deviceId: state.deviceId,
         confidence: match.score,
+        schoolId: state.schoolId,
       );
 
       if (result.outcome == RecordOutcome.recorded) {
@@ -185,9 +194,24 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
   }
 
+  /// يقرأ وقت اعتبار التأخير من إعدادات دوام المدرسة.
+  Future<void> _loadLateSetting(String? schoolId) async {
+    if (schoolId == null) return;
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query('attendance_settings',
+        where: 'school_id = ? AND scope = ?', whereArgs: [schoolId, 'school'], limit: 1);
+    if (rows.isEmpty) return;
+    final late = rows.first['late_after'] as String?;
+    if (late == null) return;
+    final parts = late.split(':');
+    if (parts.length < 2) return;
+    _lateHour = int.tryParse(parts[0]) ?? _lateHour;
+    _lateMinute = int.tryParse(parts[1]) ?? _lateMinute;
+  }
+
   String _statusFor(DateTime now) {
-    // يعتمد وقت اعتبار التأخير؛ يُضبط لاحقاً من الإعدادات.
-    return now.hour > 7 || (now.hour == 7 && now.minute > 30) ? 'late' : 'present';
+    final minutes = now.hour * 60 + now.minute;
+    return minutes > (_lateHour * 60 + _lateMinute) ? 'late' : 'present';
   }
 
   Future<Student?> _studentById(String id) async {
@@ -219,38 +243,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   /// قصّ منطقة الوجه من الإطار وتحويلها إلى صورة RGB.
   img.Image? _cropFace(CameraImage image, Face face) {
     try {
-      final full = _cameraImageToImage(image);
+      final full = CameraUtils.frameToRgb(image);
       if (full == null) return null;
       final box = face.boundingBox;
-      // هامش بسيط حول الوجه
-      final pad = box.width * 0.15;
-      var left = (box.left - pad).clamp(0, full.width - 1).toInt();
-      var top = (box.top - pad).clamp(0, full.height - 1).toInt();
-      var w = (box.width + pad * 2).clamp(1, full.width - left).toInt();
-      var h = (box.height + pad * 2).clamp(1, full.height - top).toInt();
-      return img.copyCrop(full, x: left, y: top, width: w, height: h);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  img.Image? _cameraImageToImage(CameraImage image) {
-    // NV21: أول plane يحتوي Y كاملاً، ثم VU. نبني RGB مبسّط من Y (رمادي).
-    // للسرعة نقبل بصورة رمادية موسّعة — كافية للمطابقة، مع إمكانية تحسين لاحقاً.
-    try {
-      final plane = image.planes.first;
-      final bytes = plane.bytes;
-      final width = image.width;
-      final height = image.height;
-      final out = img.Image(width: width, height: height);
-      for (var y = 0; y < height; y++) {
-        for (var x = 0; x < width; x++) {
-          final idx = y * plane.bytesPerRow + x;
-          final v = idx < bytes.length ? bytes[idx] : 0;
-          out.setPixelRgb(x, y, v, v, v);
-        }
-      }
-      return out;
+      return CameraUtils.cropBox(full, box.left, box.top, box.width, box.height);
     } catch (_) {
       return null;
     }
