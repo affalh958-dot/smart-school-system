@@ -12,6 +12,7 @@ import '../../core/permissions.dart';
 import '../../core/theme.dart';
 import '../../data/attendance_repository.dart';
 import '../../data/database.dart';
+import '../../data/device_repository.dart';
 import '../../data/models.dart';
 import '../../data/repositories.dart';
 import 'camera_utils.dart';
@@ -87,6 +88,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       if (!mounted) return;
       final state = context.read<AppState>();
       await _loadLateSetting(state.schoolId);
+      await DeviceRepository().ensureRegistered(deviceId: state.ensureDeviceId(), schoolId: state.schoolId ?? '');
       await state.rebuildFaceIndex();
       if (!mounted) return;
       setState(() {
